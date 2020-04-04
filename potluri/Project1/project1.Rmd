@@ -30,25 +30,13 @@ theme_set(cowplot::theme_cowplot())
 ```
 
 ```{r}
+# get sample keys for array and individual level
+# exclude people without at least one replicate
 
-#peptide level data import and clean
-
-calls = read_csv("aggregated_calls.csv") %>% 
-  rename_all(~(str_replace_all(., "_", ""))) %>% 
-  rename_all(~(str_replace_all(., "[.]", ""))) %>%
-  janitor::clean_names()  %>% 
-  rename(probe_sequence = probesequence,
-         seq_id = seqid)
-
-
-calls_long = calls %>%
-  gather(adt001:vpd098, key = "id", value = "is_recognized") %>%
-  mutate(is_recognized = as.logical(is_recognized))
-  
-
-sample_key = read_csv("sample_key_project1.csv") %>%
+array_id_key = read_csv("sample_key_project1.csv") %>%
   janitor::clean_names() %>% 
-  rename(stage = condition) %>%
+  rename(stage = condition,
+         array_id = "file_name") %>%
   mutate(id = str_replace_all(id, " ", ""),
          id = str_to_lower(id),
          id = str_replace_all(id, "/", ""),
@@ -56,22 +44,554 @@ sample_key = read_csv("sample_key_project1.csv") %>%
          stage = fct_recode(stage,
                             "normal" = "Normal_male_controls",
                             "new_dx" = "Newly_diagnosed",
-                            "psa_recurrent" = "PSA-recurrent_nonMet",
-                            "met" = "Met",
-                            "castration_resistant_non_met" = "Castration-resistent_nonMet",
-                            "castration_resistant_met" = "Castration-resistent_Met",
-                            "binding_buffer" = "Binding buffer alone")) %>%
+                            "nmCSPC" = "PSA-recurrent_nonMet",
+                            "mCSPC" = "Met",
+                            "nmCRPC" = "Castration-resistent_nonMet",
+                            "mCRPC" = "Castration-resistent_Met",
+                            "binding_buffer" = "Binding buffer alone"))
+  
+sample_key = array_id_key %>%
   group_by(id, stage) %>%
-  summarize() %>%
-  ungroup()
+  summarize(n = n()) %>%
+  ungroup() %>% 
+  filter(n >= 2) %>%
+  select(-n)
 
-calls_long = calls_long %>%
-  left_join(sample_key, by = "id") 
+array_id_key = array_id_key %>%
+  filter(id %in% sample_key$id)
 
-# calls_long_by_pt = calls_long %>%
-#   group_by(container, seq_id, probe_sequence, position, id, stage) %>%
-#   summarize(num_recognized = sum(is_recognized),
-#             recognized_twice = num_recognized >=2)
+```
+
+
+```{r}
+
+# read in raw data
+
+raw_data = read_csv("raw_data_complete.csv")
+
+raw_data_long = raw_data %>% 
+  select(PROBE_DESIGN_ID:Y, any_of(array_id_key$array_id)) %>%
+  pivot_longer(cols = contains("dat"), names_to = "array_id", values_to = "fluorescence") %>%
+  janitor::clean_names() %>%
+  right_join(array_id_key, by = "array_id")
+
+# flagged_pt = 
+#   tribble(
+#     ~id_1,         ~id_2,     ~flag,
+#     "MCV005",      "PDV004",      "same",
+#     "MCV119",      "ARV003",      "same",
+#     "MCV083",      "PAP092",      "same",
+#     "MCV003",      "PAP032",      "same",
+#     "ADT034",      "PAP079",      "same",
+#     "ADT181",      "PAP001",      "same",
+#     "ADT223",      "PAP054",      "same",
+#     "VPD037",      "PDV008",      "same",
+#     "PAP123",      "VPD041",      "same",
+#     "PAP067",      "VPD016",      "same",
+#     "ADT143",      "PDV104",      "same",
+#     "IPP51514151", "IPP5096",     "mixup",
+#     "PDV087",      "IPP51514151", "mixup",
+#     "PDV093",      "PDV087",      "mixup",
+#     "VPD053",      "VPD068",      "mixup",
+#     "VPD068",      "IMA187613",   "mixup",
+#     "VPD056",      "IP1131",      "mixup"
+#   ) %>%
+#   mutate_all(.funs = ~tolower(.))
+
+ids_to_remove = c("pdv004", 
+                  "arv003",
+                  "pap092",
+                  "pap032",
+                  "adt034",
+                  "adt181",
+                  "adt223",
+                  "pdv008",
+                  "pap123",
+                  "pap067",
+                  "adt143")
+
+raw_data_long = raw_data_long %>% 
+  filter(!(id %in% ids_to_remove))
+
+array_id_key_removed = array_id_key %>%
+  filter(!(id %in% ids_to_remove))
+
+
+sample_key_removed = sample_key %>%
+  filter(!(id %in% ids_to_remove))
+
+#looks like I have all the data finally
+# file_names = raw_data %>%
+#   bind_cols(run_1) %>%
+#   bind_cols(run_2) %>%
+#   select(contains("dat")) %>%
+#   names()
+# 
+# file_names %>% 
+#   enframe(name = "test", value = "array_id") %>%
+#   right_join(array_id_key) %>% 
+#   filter(is.na(test))
+```
+
+
+
+```{r}
+# PCA with and without log2 transformation
+raw_data_matrix = raw_data_long %>%
+  select(array_id, probe_id, fluorescence) %>%
+  pivot_wider(names_from = "probe_id", values_from = "fluorescence") %>%
+  column_to_rownames("array_id") %>%
+  as.matrix
+
+pca_result = prcomp(raw_data_matrix, center = TRUE, scale = TRUE)
+
+tidy(pca_result, "pcs") %>%
+  ggplot(aes(x= PC, y = cumulative)) +
+  geom_col() + 
+  scale_y_continuous(labels = scales::percent_format())
+
+tidy(pca_result, "samples") 
+  
+
+test = augment(pca_result, data = array_id_key_removed) %>%
+  ggplot(aes(x = .fittedPC1, y = .fittedPC2, label = array_id)) + 
+  geom_point()
+  
+ggplotly(test)
+
+
+raw_data_log_matrix = raw_data_long %>%
+  mutate(log2_fluorescence = log2(fluorescence)) %>%
+  select(array_id, probe_id, log2_fluorescence) %>%
+  pivot_wider(names_from = "probe_id", values_from = "log2_fluorescence") %>%
+  column_to_rownames("array_id") %>%
+  as.matrix
+
+pca_log_result = prcomp(raw_data_log_matrix, center = TRUE, scale = TRUE)
+
+tidy(pca_log_result, "pcs") %>%
+  ggplot(aes(x= PC, y = cumulative)) +
+  geom_col() + 
+  scale_y_continuous(labels = scales::percent_format())
+
+
+array_id_key_removed %>%
+  left_join(sample_key_removed, by = "id") %>%
+  augment(pca_log_result, data = .) %>% 
+  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage, shape = stage)) + 
+  geom_point()
+
+```
+
+
+```{r}
+# UMAP with and without log2 transformation
+
+umap_result = umap(normalize_input(raw_data_matrix))
+
+umap_result$layout %>%
+  as_tibble(.name_repair = "unique", rownames = "array_id") %>%
+  rename(x = ...1, y = ...2) %>% 
+  right_join(array_id_key_removed, by = "array_id") %>%
+  right_join(sample_key_removed, by = "id") %>%
+  ggplot(aes(x=x, y=y, color = stage)) +
+  geom_point() + 
+  theme_void()
+
+umap_log_result = umap(normalize_input(raw_data_log_matrix))
+
+
+umap_log_result$layout %>%
+  as_tibble(.name_repair = "unique", rownames = "array_id") %>%
+  rename(x = ...1, y = ...2) %>% 
+  right_join(array_id_key_removed, by = "array_id") %>%
+  right_join(sample_key_removed, by = "id") %>%
+  ggplot(aes(x=x, y=y, color = stage, shape = stage)) +
+  geom_point() + 
+  theme_void()
+
+```
+
+```{r}
+# average the triplicates then perform PCA
+
+raw_data_long_averaged = raw_data_long %>%
+  group_by(id, probe_id) %>%
+  summarize(mean_fluorescence = mean(fluorescence))
+
+
+raw_data_averaged_matrix = raw_data_long_averaged %>%
+  pivot_wider(names_from = "probe_id", values_from = "mean_fluorescence") %>%
+  column_to_rownames("id") %>%
+  as.matrix
+
+pca_averaged_result = prcomp(raw_data_averaged_matrix, center = TRUE, scale = TRUE)
+
+tidy(pca_averaged_result, "pcs") %>%
+  ggplot(aes(x= PC, y = cumulative)) +
+  geom_col() + 
+  scale_y_continuous(labels = scales::percent_format())
+
+sample_key_removed %>% 
+  filter(!is.na(id)) %>%
+  augment(pca_averaged_result, data = .) %>% 
+  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage)) + 
+  geom_point()
+
+raw_data_log_averaged = raw_data_long %>%
+  mutate(log2_fluorescence = log2(fluorescence)) %>%
+  group_by(id, probe_id) %>%
+  summarize(mean_fluorescence = mean(log2_fluorescence))
+
+raw_data_log_averaged_matrix = raw_data_log_averaged %>%
+  pivot_wider(names_from = "probe_id", values_from = "mean_fluorescence") %>%
+  column_to_rownames("id") %>%
+  as.matrix
+
+
+pca_log_averaged_result = prcomp(raw_data_log_averaged_matrix, center = TRUE, scale = TRUE)
+
+
+tidy(pca_log_averaged_result, "pcs") %>%
+  ggplot(aes(x= PC, y = cumulative)) +
+  geom_col() + 
+  scale_y_continuous(labels = scales::percent_format())
+
+sample_key_removed %>% 
+  filter(!is.na(id)) %>%
+  augment(pca_log_averaged_result, data = .) %>% 
+  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage)) + 
+  geom_point()
+
+```
+
+```{r}
+# PCA taking max of each peptide
+
+raw_data_max = raw_data_long %>%
+  select(probe_id, seq_id) %>%
+  distinct() %>%
+  right_join(raw_data_long_averaged, by = "probe_id") %>%
+  group_by(seq_id, id) %>%
+  summarize(max_fluorescence = max(mean_fluorescence))
+
+raw_data_max_matrix = raw_data_max %>%
+  pivot_wider(names_from = "seq_id", values_from = "max_fluorescence") %>%
+  column_to_rownames("id") %>%
+  as.matrix
+  
+pca_max_result = prcomp(raw_data_max_matrix, center = TRUE, scale = TRUE)
+
+tidy(pca_max_result, "pcs") %>%
+  ggplot(aes(x= PC, y = cumulative)) +
+  geom_col() + 
+  scale_y_continuous(labels = scales::percent_format())
+
+
+sample_key_removed %>% 
+  filter(!is.na(id)) %>%
+  augment(pca_max_result, data = .) %>% 
+  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage)) + 
+  geom_point()
+
+
+
+
+raw_data_log_max = raw_data_long %>%
+  select(probe_id, seq_id) %>%
+  distinct() %>%
+  right_join(raw_data_log_averaged, by = "probe_id") %>%
+  group_by(seq_id, id) %>%
+  summarize(max_fluorescence = max(mean_fluorescence))
+
+raw_data_log_max_matrix = raw_data_log_max %>%
+  pivot_wider(names_from = "seq_id", values_from = "max_fluorescence") %>%
+  column_to_rownames("id") %>%
+  as.matrix
+  
+pca_log_max_result = prcomp(raw_data_log_max_matrix, center = TRUE, scale = TRUE)
+
+tidy(pca_log_max_result, "pcs") %>%
+  ggplot(aes(x= PC, y = cumulative)) +
+  geom_col() + 
+  scale_y_continuous(labels = scales::percent_format())
+
+
+sample_key_removed %>% 
+  filter(!is.na(id)) %>%
+  augment(pca_log_max_result, data = .) %>% 
+  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage)) + 
+  geom_point()
+
+
+```
+
+
+```{r}
+#umap on averaged triplicates
+
+umap_log_averaged_result = umap(normalize_input(raw_data_log_averaged_matrix))
+
+umap_log_averaged_result$layout %>%
+  as_tibble(.name_repair = "unique", rownames = "id") %>%
+  rename(x = ...1, y = ...2) %>% 
+  right_join(sample_key_removed, by = "id") %>%
+  ggplot(aes(x=x, y=y, color = stage, shape = stage)) +
+  geom_point() + 
+  theme_void()
+
+
+#umap on max of each protein
+umap_log_max_result = umap(normalize_input(raw_data_log_max_matrix))
+
+
+umap_log_max_result$layout %>%
+  as_tibble(.name_repair = "unique", rownames = "id") %>%
+  rename(x = ...1, y = ...2) %>% 
+  right_join(sample_key_removed, by = "id") %>%
+  ggplot(aes(x=x, y=y, color = stage, shape = stage)) +
+  geom_point() + 
+  theme_void()
+
+
+```
+
+
+```{r}
+#TSNE
+
+tsne_result = Rtsne(normalize_input(raw_data_log_matrix))
+
+
+tsne_result$Y %>%
+  as_tibble() %>%
+  bind_cols(array_id_key_removed) %>%
+  left_join(sample_key_removed, by = "id") %>%
+  ggplot(aes(x = V1, y = V2, color = stage, shape = stage)) + 
+  geom_point()
+
+
+tsne_averaged_result = Rtsne(normalize_input(raw_data_averaged_matrix))
+
+
+sample_key_removed %>%
+  filter(!is.na(id)) %>%
+  bind_cols(as_tibble(tsne_averaged_result$Y)) %>%
+  ggplot(aes(x = V1, y = V2, color = stage, shape = stage)) + 
+  geom_point()
+
+
+
+tsne_max_result = Rtsne(normalize_input(raw_data_log_max_matrix))
+
+sample_key_removed %>%
+  filter(!is.na(id)) %>%
+  bind_cols(as_tibble(tsne_max_result$Y)) %>%
+  ggplot(aes(x = V1, y = V2, color = stage, shape = stage)) + 
+  geom_point()
+
+
+```
+
+
+```{r}
+#hierarchical clustering
+library(ggdendro)
+
+
+averaged_clust = dist(scale(raw_data_log_averaged_matrix), method = "euclidean") %>%
+  hclust(method = "complete") %>%
+  dendro_data(type = "rectangle")
+
+segment(averaged_clust) %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_segment(aes(xend = xend, yend = yend)) + 
+  geom_text(data = label(max_clust) %>% 
+              as_tibble() %>% 
+              left_join(sample_key_removed, by = c(label = "id")), 
+            aes(x = x, y = y, label = label, color = stage), 
+            hjust = -0.1, 
+            size = 2) + 
+  coord_flip() +
+  scale_y_reverse(expand = c(0.2, 0)) +
+  theme_dendro()
+
+max_clust = dist(scale(raw_data_log_max_matrix), method = "euclidean") %>%
+  hclust(method = "complete") %>%
+  dendro_data(type = "rectangle")
+
+segment(max_clust) %>%
+  ggplot(aes(x = x, y = y)) + 
+  geom_segment(aes(xend = xend, yend = yend)) + 
+  geom_text(data = label(max_clust) %>%
+              as_tibble() %>%
+              left_join(sample_key_removed, by = c(label = "id")), 
+            aes(x = x, y = y, label = label, color = stage), 
+            hjust = -0.1, 
+            size = 2) + 
+  coord_flip() +
+  scale_y_reverse(expand = c(0.2, 0)) +
+  theme_dendro()
+
+```
+
+
+## How much do patients correlate with one another?
+```{r fig.width = 8, fig.height = 7}
+
+# Do patients in a stage correlate more with each other than with pts from other stages?
+palette = colorRampPalette(brewer.pal(11,"PRGn"), space = "Lab")
+
+corr_matrix = read_csv("correlation.matrix.csv") %>%
+  rename(id = ID,
+         array_id_1 = X1) %>%
+  mutate(id = str_replace_all(id, " ", ""),
+         id = str_to_lower(id),
+         id = str_replace_all(id, "/", "")) %>%
+  rename_all(vars(contains("X")), .funs = ~str_remove(., "X"))
+
+corr_long = corr_matrix %>%
+  pivot_longer(contains(".dat"), names_to = "array_id_2", values_to = "coefficient") %>%  
+  right_join(sample_key, by = "id") %>% 
+  rename(id_1 = id,
+         stage_1 = stage) %>%
+  right_join(array_id_key, by = c("array_id_2" = "array_id")) %>% 
+  rename(id_2 = id,
+         stage_2 = stage) %>% 
+  select(-index, -notes, -rep) 
+
+corr_long %>% 
+  ggplot(aes(x=array_id_1,y=array_id_2, fill = coefficient)) +
+  geom_tile() +
+  scale_fill_gradientn(colors = palette(100), limits = c(0,1)) 
+
+corr_long %>% 
+  ggplot(aes(x=coefficient)) +
+  geom_histogram() +
+  labs(title = "What is the distribution \n of coefficients?")
+
+corr_long %>%
+  filter(id_1==id_2, array_id_1 != array_id_2) %>%
+  summarize(replicate_correlation = mean(coefficient), sd = sd(coefficient)) %>%
+  kable(caption = "how well do replicates correlate?") %>%
+  kable_styling(full_width = F)
+
+corr_long %>%
+  filter(id_1 != id_2) %>%
+  summarize(correlation = mean(coefficient), sd = sd(coefficient)) %>%
+  kable(caption = "how well do the average pair of people correlate?") %>%
+  kable_styling(full_width = F)
+
+# do members of one stage correlate better with each other than with members of a different stage?
+# didn't exclude the self-self correlations
+# corr_long %>%
+#   group_by(stage_1, stage_2) %>%
+#   summarize(inter_stage_correlation = mean(coefficient), sd = sd(coefficient))
+
+
+
+corr_long %>%
+  filter(array_id_1 != array_id_2) %>%
+  group_by(stage_1, stage_2) %>%
+  mutate(fisher_z = 0.5*(log(1+coefficient) - log(1-coefficient))) %>%
+  summarize(
+    inter_stage_correlation_z = mean(coefficient),
+    inter_stage_correlation = (exp(2*inter_stage_correlation_z) - 1) / (exp(2*inter_stage_correlation_z) + 1),
+    sd = sd(coefficient)) %>%
+  mutate(stage_2 = fct_rev(stage_2)) %>%
+  ggplot(aes(x=stage_1, y = stage_2, fill = inter_stage_correlation)) +
+  geom_tile() + 
+  geom_text(aes(label = round(inter_stage_correlation,2))) +
+  scale_fill_gradientn(colors = palette(100), limits = c(0,1)) + 
+  labs(title = "Do members of a given stage \n correlate better with members of their stage \n than with members of other stages?",
+       x = "",
+       y = "",
+       fill = "Correlation Coefficient") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+# does anyone correlate well with a different individual? this results in basically the tables ken made identifying individuals in multiple trials
+
+flagged_pt = 
+  tribble(
+    ~id_1,         ~id_2,     ~flag,
+    "MCV005",      "PDV004",      "same",
+    "MCV119",      "ARV003",      "same",
+    "MCV083",      "PAP092",      "same",
+    "MCV003",      "PAP032",      "same",
+    "ADT034",      "PAP079",      "same",
+    "ADT181",      "PAP001",      "same",
+    "ADT223",      "PAP054",      "same",
+    "VPD037",      "PDV008",      "same",
+    "PAP123",      "VPD041",      "same",
+    "PAP067",      "VPD016",      "same",
+    "ADT143",      "PDV104",      "same",
+    "IPP51514151", "IPP5096",     "mixup",
+    "PDV087",      "IPP51514151", "mixup",
+    "PDV093",      "PDV087",      "mixup",
+    "VPD053",      "VPD068",      "mixup",
+    "VPD068",      "IMA187613",   "mixup",
+    "VPD056",      "IP1131",      "mixup"
+  ) %>%
+  mutate_all(.funs = ~tolower(.))
+
+
+annotated_corr_long = corr_long %>%
+  filter(id_1 != id_2) %>%
+  group_by(id_1, id_2) %>%
+  summarize(mean_coeff = mean(coefficient)) %>%
+  ungroup() %>%
+  select(id_1, id_2, mean_coeff) %>%
+  filter(!duplicated(str_c(pmax(id_1, id_2), pmin(id_1, id_2)))) %>%
+  arrange(-mean_coeff) %>%
+  filter(mean_coeff > .45) %>% 
+  left_join(flagged_pt, by = c("id_1", "id_2")) %>% 
+  left_join(flagged_pt, by = c(id_1 = "id_2", id_2 = "id_1")) %>% 
+  mutate(flag = ifelse(!is.na(flag.x), flag.x, flag.y),
+         flag = ifelse(!is.na(flag.y), flag.y, flag.x)) %>% 
+  select(-flag.x, -flag.y)
+
+annotated_corr_long %>%
+  kable(caption = "Does anyone correlate well with a different individual?") %>%
+  kable_styling() %>%
+  scroll_box(height = "400px")
+
+# histogram won't label :(
+# annotated_corr_long %>% 
+#   ggplot(aes(x=mean_coeff)) +
+#   geom_histogram() +
+#   stat_bin(data = . %>% filter(flag == "same"), geom = "text", aes(label = "test")) +
+#   labs(title = "What is the distribution \n of coefficients?")
+
+annotated_corr_long %>% 
+  ggplot(aes(x=str_c(id_1,id_2), y=mean_coeff, color = flag)) +
+  geom_point() +
+  geom_text_repel(data = . %>% filter(!is.na(flag)), geom = "text", aes(label = flag)) +
+  labs(title = "Patients have unique antibody signatures",
+       x = "Pair of Individuals",
+       y = "Coefficient") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "none")
+
+```
+
+```{r}
+
+#peptide level data import and clean
+
+calls = read_csv("aggregated_calls_full_nmcspc.csv") 
+
+calls_long = calls %>%
+  pivot_longer(adt001:adt311, names_to = "id", values_to = "is_recognized") %>% 
+  mutate(is_recognized = as.logical(is_recognized)) %>%
+  right_join(sample_key, by = "id") 
+
+
+#0.4% of calls are positive
+#20% of peptides are recognized at least once
+#97% of proteins are recognized at least once
 
 ```
 
@@ -86,31 +606,14 @@ calls_by_stage = calls_long %>%
 
 calls_by_stage %>% 
   mutate(stage = fct_rev(stage)) %>%
-  ggplot(aes(x = stage, y = number_recognized)) + 
-  geom_boxplot() + 
-  coord_flip()
+  ggplot(aes(x = number_recognized, y = stage)) + 
+  geom_boxplot() 
 
 calls_by_stage %>% 
   mutate(stage = fct_rev(stage)) %>%
-  ggplot(aes(x = stage, y = number_recognized, color = stage)) + 
+  ggplot(aes(x = number_recognized, y = stage, color = stage)) + 
   geom_jitter(width = .25) + 
-  coord_flip() +
   theme(legend.position = "none")
-
-# calls_long %>%
-#   summarize(count = n_distinct(seq_id))
-
-# calls_long_by_pt %>%
-#   filter(recognized_twice) %>%
-#   group_by(stage, position, seq_id) %>%
-#   summarize(number_pts_recognizing = n()) %>% 
-#   arrange(-number_pts_recognizing) %>% View()
-# 
-# calls_long_by_pt_protein = calls_long_by_pt %>%
-#   group_by(stage, seq_id) %>%
-#   summarize(number_pts_recognizing_protein = sum(recognized_twice)) %>%
-#   spread(key = stage, value = number_pts_recognizing_protein) %>%
-#   arrange(normal, -castration_resistant_met)
 
 fit = aov(number_recognized ~ stage, data = calls_by_stage)
 Dunnett = glht(fit, linfct=mcp(stage="Dunnett"))
@@ -199,27 +702,25 @@ uniprot_data_extracted %>%
 ## How many proteins are recognized in each stage?
 ```{r}
 #aggregate patient level data by protein
-#1601 proteins * 147 patients = 235347 rows
-# calls %>% distinct(probe_sequence, position, seq_id): 64,987 probes
 
 protein_calls_long_by_pt = calls_long %>% 
   group_by(seq_id,id) %>%
   summarize(num_protein_recognized = sum(is_recognized),
             is_protein_recognized = num_protein_recognized > 0) %>%
   left_join(sample_key, by = "id") %>%
-  left_join(uniprot_data_extracted, by = "seq_id")
+  left_join(uniprot_data_extracted, by = "seq_id") %>%
+  ungroup()
 
-protein_calls_long_by_stage = protein_calls_long_by_pt %>%
+overall_protein_calls_long_by_stage = protein_calls_long_by_pt %>%
   filter(is_protein_recognized) %>%
   group_by(stage, id) %>%
   summarize(number_recognized = n()) %>%
   ungroup()
   
-protein_calls_long_by_stage %>%
+overall_protein_calls_long_by_stage %>%
   mutate(stage = fct_rev(stage)) %>%
-  ggplot(aes(x = stage, y = number_recognized, color = stage)) +
-  geom_jitter(width = .25) + 
-  coord_flip() + 
+  ggplot(aes(x = number_recognized , y = stage, color = stage)) +
+  geom_jitter(width = .25) +
   theme(legend.position = "none") +
   labs(x = "",
        y = "Number of proteins recognized")
@@ -250,183 +751,34 @@ protein_calls_long_by_pt %>%
 
 ```
 
-## How much do patients correlate with one another?
-```{r fig.width = 8, fig.height = 7}
-
-# Do patients in a stage correlate more with each other than with pts from other stages?
-palette = colorRampPalette(brewer.pal(11,"PRGn"), space = "Lab")
-
-corr_matrix = read_csv("correlation.matrix.csv") %>%
-  rename(id = ID,
-         array_id_1 = X1) %>%
-  mutate(id = str_replace_all(id, " ", ""),
-         id = str_to_lower(id),
-         id = str_replace_all(id, "/", "")) %>%
-  rename_all(vars(contains("X")), .funs = ~str_remove(., "X"))
-
-array_id_key = corr_matrix %>%
-  select(array_id = array_id_1, id)
-
-corr_long = corr_matrix %>%
-  pivot_longer(contains(".dat"), names_to = "array_id_2", values_to = "coefficient") %>%
-  rename(id_1 = id) %>%
-  left_join(array_id_key, by = c("array_id_2" = "array_id")) %>%
-  rename(id_2 = id) %>% 
-  left_join(sample_key, by = c("id_1" = "id")) %>%
-  rename(stage_1 = stage) %>%
-  left_join(sample_key, by = c("id_2" = "id")) %>%
-  rename(stage_2 = stage) 
 
 
-corr_long %>% 
-  ggplot(aes(x=array_id_1,y=array_id_2, fill = coefficient)) +
-  geom_tile() +
-  scale_fill_gradientn(colors = palette(100), limits = c(0,1)) 
 
-corr_long %>% 
-  ggplot(aes(x=coefficient)) +
-  geom_histogram() +
-  labs(title = "What is the distribution \n of coefficients?")
-
-corr_long %>%
-  filter(id_1==id_2, array_id_1 != array_id_2) %>%
-  summarize(replicate_correlation = mean(coefficient), sd = sd(coefficient)) %>%
-  kable(caption = "how well do replicates correlate?") %>%
-  kable_styling(full_width = F)
-
-corr_long %>%
-  filter(id_1 != id_2) %>%
-  summarize(correlation = mean(coefficient), sd = sd(coefficient)) %>%
-  kable(caption = "how well do the average pair of people correlate?") %>%
-  kable_styling(full_width = F)
-
-# do members of one stage correlate better with each other than with members of a different stage?
-# didn't exclude the self-self correlations
-# corr_long %>%
-#   group_by(stage_1, stage_2) %>%
-#   summarize(inter_stage_correlation = mean(coefficient), sd = sd(coefficient))
-
-corr_long %>%
-  group_by(stage_1, stage_2) %>%
-  summarize(inter_stage_correlation = mean(coefficient), sd = sd(coefficient)) %>%
-  mutate(stage_2 = fct_rev(stage_2)) %>%
-  ggplot(aes(x=stage_1, y = stage_2, fill = inter_stage_correlation)) +
-  geom_tile() + 
-  geom_text(aes(label = round(inter_stage_correlation,2))) +
-  scale_fill_gradientn(colors = palette(100), limits = c(0,1)) + 
-  labs(title = "Do members of a given stage \n correlate better with members of their stage \n than with members of other stages?",
-      x = "",
-       y = "",
-       fill = "Correlation") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-
-# does anyone correlate well with a different individual? this results in basically the tables ken made identifying individuals in multiple trials
-
-flagged_pt = 
-  tribble(
-    ~id_1,         ~id_2,     ~flag,
-    "MCV005",      "PDV004",      "same",
-    "MCV119",      "ARV003",      "same",
-    "MCV083",      "PAP092",      "same",
-    "MCV003",      "PAP032",      "same",
-    "ADT034",      "PAP079",      "same",
-    "ADT181",      "PAP001",      "same",
-    "ADT223",      "PAP054",      "same",
-    "VPD037",      "PDV008",      "same",
-    "PAP123",      "VPD041",      "same",
-    "PAP067",      "VPD016",      "same",
-    "ADT143",      "PDV104",      "same",
-    "IPP51514151", "IPP5096",     "mixup",
-    "PDV087",      "IPP51514151", "mixup",
-    "PDV093",      "PDV087",      "mixup",
-    "VPD053",      "VPD068",      "mixup",
-    "VPD068",      "IMA187613",   "mixup",
-    "VPD056",      "IP1131",      "mixup"
-  ) %>%
-  mutate_all(.funs = ~tolower(.))
-
-
-annotated_corr_long = corr_long %>%
-  filter(id_1 != id_2) %>%
-  group_by(id_1, id_2) %>%
-  summarize(mean_coeff = mean(coefficient)) %>%
-  ungroup() %>%
-  select(id_1, id_2, mean_coeff) %>%
-  filter(!duplicated(str_c(pmax(id_1, id_2), pmin(id_1, id_2)))) %>%
-  arrange(-mean_coeff) %>%
-  filter(mean_coeff > .45) %>% 
-  left_join(flagged_pt, by = c("id_1", "id_2")) %>% 
-  left_join(flagged_pt, by = c(id_1 = "id_2", id_2 = "id_1")) %>% 
-  mutate(flag = ifelse(!is.na(flag.x), flag.x, flag.y),
-         flag = ifelse(!is.na(flag.y), flag.y, flag.x)) %>% 
-  select(-flag.x, -flag.y)
-
-annotated_corr_long %>%
-  kable(caption = "Does anyone correlate well with a different individual?") %>%
-  kable_styling() %>%
-  scroll_box(height = "400px")
-
-# histogram won't label :(
-# annotated_corr_long %>% 
-#   ggplot(aes(x=mean_coeff)) +
-#   geom_histogram() +
-#   stat_bin(data = . %>% filter(flag == "same"), geom = "text", aes(label = "test")) +
-#   labs(title = "What is the distribution \n of coefficients?")
-
-annotated_corr_long %>% 
-  ggplot(aes(x=str_c(id_1,id_2), y=mean_coeff, color = flag)) +
-  geom_point() +
-  geom_text_repel(data = . %>% filter(!is.na(flag)), geom = "text", aes(label = flag)) +
-  labs(title = "Patients have unique antibody signatures",
-       x = "Pair of Individuals",
-       y = "Coefficient") +
-  theme(axis.text.x = element_blank(),
-        axis.ticks.x = element_blank(),
-        legend.position = "none")
-
-```
 
 
 ```{r}
-#protein level data import and clean
-protein_calls = read_csv("aggregate_calls_to_protein_by_group_counts.csv") %>%
-  janitor::clean_names() %>%
-  rename(castration_resistant_met = castration_resistent_met,
-         castration_resistant_non_met = castration_resistent_non_met,
-         new_dx = newly_diagnosed,
-         normal = normal_male_controls,
-         psa_recurrent = psa_recurrent_non_met)
+# summarize original dataset to how many patients of each stage recognize each protein
 
-#1601 proteins
-
-protein_calls_long = protein_calls %>% 
-  gather(-seq_id, key = "stage", value = "number_of_pts_recognizing")
-
-
-sample_size = read_csv("sample_size.csv")
-
-order = c("normal", "new_dx", "psa_recurrent", "met", "castration_resistant_non_met","castration_resistant_met")
-
-protein_calls_long = protein_calls_long %>%
-  left_join(sample_size, by = "stage") %>%
-    mutate(stage = as_factor(stage),
-         stage = fct_relevel(stage,order),
-         pct_pts_recognizing = number_of_pts_recognizing/sample_size) %>%
+protein_calls_long_by_seq_id = protein_calls_long_by_pt %>%
+  group_by(seq_id, stage) %>%
+  summarize(number_of_pts_recognizing = sum(is_protein_recognized)) %>%
+  ungroup() %>%
+  left_join(sample_key %>% count(stage, name = "sample_size"), by = "stage") %>%
+  mutate(pct_pts_recognizing = number_of_pts_recognizing/sample_size) %>%
   left_join(uniprot_data_extracted, by = "seq_id")
-
+  
 ```
 
 ## There are `r protein_calls %>% count(seq_id) %>% summarize(sum(n)) %>% as_vector()` proteins total
 
 ```{r}
-normal_proteins = protein_calls_long %>% 
+normal_proteins = protein_calls_long_by_seq_id %>% 
   filter(stage == "normal", pct_pts_recognizing >= 0.9) %>%
   select(seq_id) %>%
   as_vector() %>%
   unname()
 
-# protein_calls_long %>% 
+# protein_calls_long_by_seq_id %>%
 #   filter(stage == "normal", pct_pts_recognizing >= 0.9) %>%
 #   select(seq_id) %>%
 #   write_csv("normal_proteins.csv", col_names = FALSE)
@@ -435,32 +787,30 @@ normal_proteins = protein_calls_long %>%
 ## There are `r length(normal_proteins)`  proteins recognized in > 90% of normals
 
 ```{r}
-protein_calls_long %>% 
-  filter(seq_id %in% normal_proteins, stage == "met") %>%
+uniprot_data_extracted %>% 
+  filter(seq_id %in% normal_proteins) %>%
   select(seq_id, protein_names, subcellular_location_cc, function_cc, tissue_specificity, involvement_in_disease, length) %>%
   kable(col.names = NA,
         caption = ) %>%
   kable_styling() %>%
   scroll_box(height = "400px")
 
-protein_calls_long %>% 
+uniprot_data_extracted %>% 
   filter(seq_id %in% normal_proteins) %>% 
   pivot_longer(nucleus:transcription_factor, names_to = "feature", values_to = "feature_present") %>%
   group_by(feature) %>%
-  filter(!is.na(feature_present), stage == "met") %>%
-  summarize(pct_feature_present = sum(feature_present)/length(normal_proteins)) %>% 
+  summarize(pct_feature_present = sum(feature_present, na.rm = TRUE)/length(normal_proteins)) %>% 
   mutate(feature = fct_reorder(feature, pct_feature_present)) %>% 
-  ggplot(aes(x=feature, y = pct_feature_present)) +
+  ggplot(aes(x = pct_feature_present, y = feature)) +
   geom_col() +
-  coord_flip() +
-  scale_y_continuous(labels = scales::label_percent()) + 
+  scale_x_continuous(labels = scales::label_percent()) + 
   labs(title = "What types of proteins are the normal proteins?",
-       x = "",
-       y = "% of proteins in each location")
+       x = "% of proteins in each location",
+       y = "")
 ```
 
 ```{r}
-abnormal_proteins = protein_calls_long %>% 
+abnormal_proteins = protein_calls_long_by_seq_id %>% 
   filter(stage == "normal", pct_pts_recognizing == 0) %>%
   select(seq_id) %>%
   as_vector() %>%
@@ -470,34 +820,33 @@ abnormal_proteins = protein_calls_long %>%
 ## There are `r length(abnormal_proteins)` proteins never recognized in normals
 
 ```{r}
-protein_calls_long %>%
-  filter(seq_id %in% abnormal_proteins, stage == "met") %>%
+uniprot_data_extracted %>%
+  filter(seq_id %in% abnormal_proteins) %>%
   select(seq_id, protein_names, subcellular_location_cc, function_cc, tissue_specificity, involvement_in_disease, length) %>%
   kable(col.names = NA) %>%
   kable_styling() %>%
   scroll_box(height = "400px")
 
-protein_calls_long %>% 
+uniprot_data_extracted %>% 
   filter(seq_id %in% abnormal_proteins) %>% 
   pivot_longer(nucleus:transcription_factor, names_to = "feature", values_to = "feature_present") %>%
   group_by(feature) %>%
-  filter(!is.na(feature_present), stage == "met") %>%
+  filter(!is.na(feature_present)) %>%
   summarize(pct_feature_present = sum(feature_present)/length(abnormal_proteins)) %>%
   ungroup() %>%
   mutate(feature = fct_reorder(feature, pct_feature_present)) %>% 
-  ggplot(aes(x=feature, y = pct_feature_present)) +
-  geom_col() +
-  coord_flip() +
-  scale_y_continuous(labels = scales::label_percent()) + 
+  ggplot(aes(x = pct_feature_present, y = feature)) +
+  geom_col() + 
+  scale_x_continuous(labels = scales::label_percent()) + 
   labs(title = "What types of proteins are the abnormal proteins?",
-       x = "",
-       y = "% of proteins in each location")
+       x = "% of proteins in each location",
+       y = "")
 
 ```
 
 ## is there a change in the number of "abnormal proteins" recognized in patients according to stage?
 ```{r}
-protein_calls_long %>% 
+protein_calls_long_by_seq_id %>% 
   filter(stage == "normal", pct_pts_recognizing == 0) %>%
   select(seq_id) %>%
   left_join(protein_calls_long_by_pt, by = "seq_id") %>% 
@@ -514,7 +863,7 @@ protein_calls_long %>%
        y = "Number of proteins recognized")
 
 
-protein_calls_long %>% 
+protein_calls_long_by_seq_id %>% 
   filter(stage == "normal", pct_pts_recognizing <= 0.06) %>%
   select(seq_id) %>%
   left_join(protein_calls_long_by_pt, by = "seq_id") %>% 
@@ -535,7 +884,7 @@ protein_calls_long %>%
 ```
 
 ```{r}
-protein_calls_long %>% 
+protein_calls_long_by_seq_id %>% 
   filter(seq_id %in% normal_proteins) %>% 
   filter(stage != "normal") %>% 
   ggplot(aes(x = pct_pts_recognizing)) +
@@ -543,7 +892,7 @@ protein_calls_long %>%
   facet_wrap(~stage) +
   labs(title = "Most cancer patients also recognize proteins \n recognized by normals")
 
-protein_calls_long %>% 
+protein_calls_long_by_seq_id %>% 
   filter(seq_id %in% abnormal_proteins) %>% 
   filter(stage != "normal") %>% 
   ggplot(aes(x = pct_pts_recognizing)) +
@@ -572,7 +921,7 @@ protein_calls_long %>%
 # save_plot("top_abnormal_proteins.pdf", top_abnormal_proteins, base_width = 8, base_height = 16)
 
 
-top_abnormal_proteins = protein_calls_long %>%
+top_abnormal_proteins = protein_calls_long_by_seq_id %>%
   filter(seq_id %in% abnormal_proteins) %>% 
   filter(stage != "normal") %>% 
   group_by(stage) %>%
@@ -593,7 +942,7 @@ top_abnormal_proteins
 ## Which "abnormal" proteins show up the most across stages? (Recognized in at least 10% of patients)
 ```{r fig.height = 7, fig.width = 12}
 
-protein_calls_long %>% 
+protein_calls_long_by_seq_id %>% 
   filter(seq_id %in% abnormal_proteins) %>% 
   filter(stage != "normal") %>% 
   filter(pct_pts_recognizing > .10) %>%
@@ -605,14 +954,14 @@ protein_calls_long %>%
   scroll_box(height = "400px")
 
 
-protein_calls_long %>% 
+protein_calls_long_by_seq_id %>% 
   filter(seq_id %in% abnormal_proteins) %>% 
   filter(stage != "normal") %>% 
   filter(pct_pts_recognizing > .10) %>%
   add_count(seq_id, name = "number_of_stages_recognized_in") %>% 
   pivot_longer(nucleus:transcription_factor, names_to = "feature", values_to = "feature_present") %>%
   group_by(feature, number_of_stages_recognized_in) %>%
-  filter(!is.na(feature_present), stage == "met") %>%
+  filter(!is.na(feature_present), stage == "mCRPC") %>%
   summarize(pct_feature_present = sum(feature_present)/n_distinct(seq_id)) %>%
   ungroup() %>%
   mutate(feature = reorder_within(feature, pct_feature_present,number_of_stages_recognized_in )) %>% 
@@ -631,7 +980,7 @@ protein_calls_long %>%
 
 ## Are there any proteins that aren't recognized by anyone?
 ```{r}
-never_recognized = protein_calls_long %>% 
+never_recognized = protein_calls_long_by_seq_id %>% 
   group_by(seq_id) %>%
   summarize(s = sum(pct_pts_recognizing)) %>% 
   filter(near(s,0)) %>% 
@@ -639,7 +988,7 @@ never_recognized = protein_calls_long %>%
   unname() %>%
   as_vector()
 
-protein_calls_long %>%
+uniprot_data_extracted %>%
   filter(seq_id %in% never_recognized) %>%
   select(seq_id, protein_names, subcellular_location_cc, function_cc, tissue_specificity, involvement_in_disease, length) %>%
   kable(col.names = NA) %>%
@@ -650,7 +999,7 @@ protein_calls_long %>%
 ## There are no proteins recognized by every single subject.
 ## Most of proteins recognized by almost everyone are proteins that are recognized by most normals
 ```{r}
-protein_calls_long %>% 
+protein_calls_long_by_seq_id %>% 
   group_by(seq_id) %>%
   summarize(s = sum(pct_pts_recognizing)) %>% 
   mutate(is_normal = seq_id %in% normal_proteins) %>%
@@ -658,7 +1007,7 @@ protein_calls_long %>%
   geom_histogram() +
   labs(x = "Sum of fraction recognized across all stages")
 
-protein_calls_long %>% 
+protein_calls_long_by_seq_id %>% 
   group_by(seq_id) %>%
   summarize(s = sum(pct_pts_recognizing)) %>% 
   filter(s>5) %>%
@@ -673,57 +1022,48 @@ protein_calls_long %>%
 
 
 
-
-
-
 ## Are there certain proteins that are overrepresented in a single stage (are there stage-defining proteins)?
 ```{r}
-protein_calls_short = protein_calls_long %>% 
+protein_calls_short_by_seq_id = protein_calls_long_by_seq_id %>% 
   select(-number_of_pts_recognizing, -sample_size) %>%
-  spread(key = stage, value = pct_pts_recognizing)
+  pivot_wider(names_from = stage, values_from = pct_pts_recognizing)
 
 # any proteins with high fold change compared to all other stages
 # this is probably a bad way to do this but I add a small number to get rid of 0s 
+
+
 add1 = function(x) (x+.000001)
 sub1 = function(x) (x-.000001)
-fold_change = protein_calls_short %>% 
+
+fold_change = protein_calls_short_by_seq_id %>% 
   mutate_if(is.numeric, add1) %>%
   mutate(normal_fold_change = pmin(normal/new_dx, 
-                                   normal/psa_recurrent, 
-                                   normal/met, 
-                                   normal/castration_resistant_non_met,
-                                   normal/castration_resistant_met),
+                                   normal/nmCSPC, 
+                                   normal/nmCRPC,
+                                   normal/mCRPC),
          new_dx_fold_change = pmin(new_dx/normal, 
-                                   new_dx/psa_recurrent, 
-                                   new_dx/met, 
-                                   new_dx/castration_resistant_non_met,
-                                   new_dx/castration_resistant_met),
-         psa_recurrent_fold_change = pmin(psa_recurrent/normal, 
-                                          psa_recurrent/new_dx, 
-                                          psa_recurrent/met, 
-                                          psa_recurrent/castration_resistant_non_met,
-                                          psa_recurrent/castration_resistant_met),
-         met_fold_change = pmin(met/normal,
-                                met/new_dx, 
-                                met/psa_recurrent,
-                                met/castration_resistant_non_met,
-                                met/castration_resistant_met),
-         castration_resistant_non_met_fold_change = pmin(castration_resistant_non_met/normal,
-                                                         castration_resistant_non_met/new_dx,
-                                                         castration_resistant_non_met/psa_recurrent,
-                                                         castration_resistant_non_met/met,
-                                                         castration_resistant_non_met/castration_resistant_met),
-         castration_resistant_met_fold_change = pmin(castration_resistant_met/normal,
-                                                         castration_resistant_met/new_dx,
-                                                         castration_resistant_met/psa_recurrent,
-                                                         castration_resistant_met/met,
-                                                         castration_resistant_met/castration_resistant_non_met)) %>%
-  mutate_at(c("normal", "new_dx", "psa_recurrent", "met", "castration_resistant_non_met", "castration_resistant_met"), sub1)
+                                   new_dx/nmCSPC, 
+                                   new_dx/nmCRPC,
+                                   new_dx/mCRPC),
+         nmCSPC_fold_change = pmin(nmCSPC/normal, 
+                                   nmCSPC/new_dx, 
+                                   nmCSPC/nmCRPC,
+                                   nmCSPC/mCRPC),
+         nmCRPC_fold_change = pmin(nmCRPC/normal,
+                                   nmCRPC/new_dx,
+                                   nmCRPC/nmCSPC,
+                                   nmCRPC/mCRPC),
+         mCRPC_fold_change = pmin(mCRPC/normal,
+                                  mCRPC/new_dx,
+                                  mCRPC/nmCSPC,
+                                  mCRPC/nmCRPC)) %>%
+  mutate_at(c("normal", "new_dx", "nmCSPC", "nmCRPC","mCRPC"), sub1)
+
 
 fold_change %>%
   filter(normal_fold_change > 2) %>%
   arrange(-normal) %>% 
-  select(-new_dx_fold_change, -psa_recurrent_fold_change, -met_fold_change, -castration_resistant_non_met_fold_change, -castration_resistant_met_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
+  select(-new_dx_fold_change, -nmCSPC_fold_change, -nmCRPC_fold_change, -mCRPC_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
   kable() %>%
   kable_styling() %>%
   scroll_box(height = "400px")
@@ -731,39 +1071,32 @@ fold_change %>%
 fold_change %>%
   filter(new_dx_fold_change > 2) %>%
   arrange(-new_dx) %>% 
-  select(-normal_fold_change, -psa_recurrent_fold_change, -met_fold_change, -castration_resistant_non_met_fold_change, -castration_resistant_met_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
+  select(-normal_fold_change, -nmCSPC_fold_change, -nmCRPC_fold_change, -mCRPC_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
   kable() %>%
   kable_styling() %>%
   scroll_box(height = "400px")
 
 fold_change %>%
-  filter(psa_recurrent_fold_change > 2) %>%
-  arrange(-psa_recurrent) %>% 
-  select(-normal_fold_change, -new_dx_fold_change, -met_fold_change, -castration_resistant_non_met_fold_change, -castration_resistant_met_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
+  filter(nmCSPC_fold_change > 2) %>%
+  arrange(-nmCSPC) %>% 
+  select(-normal_fold_change, -new_dx_fold_change, -nmCRPC_fold_change, -mCRPC_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
   kable() %>%
   kable_styling() %>%
   scroll_box(height = "400px")
  
+
 fold_change %>%
-  filter(met_fold_change > 2) %>%
-  arrange(-met) %>% 
-  select(-normal_fold_change, -new_dx_fold_change, -psa_recurrent_fold_change, -castration_resistant_non_met_fold_change, -castration_resistant_met_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
+  filter(nmCRPC_fold_change > 2) %>%
+  arrange(-nmCRPC) %>% 
+  select(-normal_fold_change, -new_dx_fold_change, -nmCSPC_fold_change, -mCRPC_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
   kable() %>%
   kable_styling() %>%
   scroll_box(height = "400px")
 
 fold_change %>%
-  filter(castration_resistant_non_met_fold_change > 2) %>%
-  arrange(-castration_resistant_non_met) %>% 
-  select(-normal_fold_change, -new_dx_fold_change, -psa_recurrent_fold_change, -met_fold_change, -castration_resistant_met_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
-  kable() %>%
-  kable_styling() %>%
-  scroll_box(height = "400px")
-
-fold_change %>%
-  filter(castration_resistant_met_fold_change > 2) %>%
-  arrange(-castration_resistant_met) %>% 
-  select(-normal_fold_change, -new_dx_fold_change, -psa_recurrent_fold_change, -met_fold_change, -castration_resistant_non_met_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
+  filter(mCRPC_fold_change > 2) %>%
+  arrange(-mCRPC) %>% 
+  select(-normal_fold_change, -new_dx_fold_change, -nmCSPC_fold_change, -nmCRPC_fold_change, -uniprot_id, -gene_names, -doug_name, -query, -nucleus, -cytoplasm, -mitochondria, -er, -golgi, -lysosome, -secreted, -endosome, -plasma_membrane, -junction, -peroxisome, -membrane, -cilium, cytoskeleton, -lnc_rna, -ribosomal, -transcription_factor) %>% 
   kable() %>%
   kable_styling() %>%
   scroll_box(height = "400px")
@@ -785,10 +1118,9 @@ fold_change %>%
   ungroup() %>%
   mutate(enriched_stage = fct_relevel(enriched_stage, c("normal_enriched", 
                                                         "new_dx_enriched",
-                                                        "psa_recurrent_enriched",
-                                                        "met_enriched",
-                                                        "castration_resistant_non_met_enriched",
-                                                        "castration_resistant_met_enriched"))) %>%
+                                                        "nmCSPC_enriched",
+                                                        "nmCRPC_enriched",
+                                                        "mCRPC_enriched"))) %>%
   mutate(feature = reorder_within(feature, pct_feature_present, enriched_stage)) %>%
   ggplot(aes(x=feature, y = pct_feature_present)) +
   geom_col() +
@@ -806,17 +1138,17 @@ fold_change %>%
 # list of the patients who recognized proteins in the castration_resistant_met enriched protein list
 
 ```{r}
-castration_resistant_met_enriched = fold_change %>%
-  filter(castration_resistant_met_fold_change > 2) %>%
-  select(seq_id, castration_resistant_met)
+mCRPC_enriched = fold_change %>%
+  filter(mCRPC_fold_change > 2) %>%
+  select(seq_id, mCRPC)
 
 protein_calls_long_by_pt %>%
   filter(is_protein_recognized) %>%
-  right_join(castration_resistant_met_enriched) %>%
-  filter(stage %in% c("normal", "psa_recurrent", "castration_resistant_non_met", "castration_resistant_met")) %>%
+  right_join(mCRPC_enriched) %>%
+  filter(stage %in% c("normal", "nmCSPC", "nmCRPC", "mCRPC")) %>%
   select(-num_protein_recognized, -is_protein_recognized) %>%
-  arrange(stage, -castration_resistant_met) %>%
-  select(seq_id, id, stage, castration_resistant_met) %>%
+  arrange(stage, -mCRPC) %>%
+  select(seq_id, id, stage, mCRPC) %>%
   kable() %>%
   kable_styling() %>%
   scroll_box(height = "400px")
@@ -827,19 +1159,17 @@ protein_calls_long_by_pt %>%
 ## Are there proteins that are overrepresented in cancer vs normal and vice versa?
 ```{r}
 
-cancer_fold_change = protein_calls_short %>% 
+cancer_fold_change = protein_calls_short_by_seq_id %>% 
   mutate_if(is.numeric, add1) %>%
   mutate(normal_fold_change = pmin(normal/new_dx, 
-                                   normal/psa_recurrent, 
-                                   normal/met, 
-                                   normal/castration_resistant_non_met,
-                                   normal/castration_resistant_met),
+                                   normal/nmCSPC, 
+                                   normal/nmCRPC,
+                                   normal/mCRPC),
          cancer_fold_change = pmin(new_dx/normal, 
-                                   psa_recurrent/normal, 
-                                   met/normal, 
-                                   castration_resistant_non_met/normal,
-                                   castration_resistant_met/normal) ) %>%
-  mutate_at(c("normal", "new_dx", "psa_recurrent", "met", "castration_resistant_non_met", "castration_resistant_met"), sub1)
+                                   nmCSPC/normal, 
+                                   nmCRPC/normal,
+                                   mCRPC/normal) ) %>%
+  mutate_at(c("normal", "new_dx", "nmCSPC", "nmCRPC", "mCRPC"), sub1)
 
 all_cancer_enriched = cancer_fold_change %>% 
   filter(cancer_fold_change > 2) %>%
@@ -852,11 +1182,11 @@ normal_enriched_all_cancer = cancer_fold_change %>%
   as_vector
 
 
-cancer_fold_change %>%
-  filter(cancer_fold_change > 2) %>%
-  select(uniprot_id) %>%
-  filter(!is.na(uniprot_id)) %>%
-  write_csv("test.csv", col_names = FALSE)
+# cancer_fold_change %>%
+#   filter(cancer_fold_change > 2) %>%
+#   select(uniprot_id) %>%
+#   filter(!is.na(uniprot_id)) %>%
+#   write_csv("cancer_enriched.csv", col_names = FALSE)
 
 cancer_fold_change %>%
   filter(cancer_fold_change > 2) %>%
@@ -872,11 +1202,10 @@ cancer_fold_change %>%
 
 
 # what percent of all mitochondrial proteins do the cancer enriched proteins account for? 
-protein_calls_long %>%
+uniprot_data_extracted %>%
   mutate(is_normal_enriched = seq_id %in% normal_enriched_all_cancer,
          is_cancer_enriched = seq_id %in% all_cancer_enriched) %>%
   pivot_longer(nucleus:transcription_factor, names_to = "feature", values_to = "feature_present") %>%
-  filter(stage == "met") %>%
   group_by(feature) %>%
   summarize(pct_feature_present_overall = sum(feature_present, na.rm = TRUE)/n_distinct(seq_id),
             feature_count_overall = sum(feature_present, na.rm = TRUE),
@@ -899,11 +1228,10 @@ protein_calls_long %>%
        fill = "")
 
 
-protein_calls_long %>%
+uniprot_data_extracted %>%
   mutate(is_normal_enriched = seq_id %in% normal_enriched_all_cancer,
          is_cancer_enriched = seq_id %in% all_cancer_enriched) %>%
   pivot_longer(nucleus:transcription_factor, names_to = "feature", values_to = "feature_present") %>%
-  filter(stage == "met") %>%
   group_by(feature) %>%
   summarize(pct_feature_present_overall = sum(feature_present, na.rm = TRUE)/n_distinct(seq_id),
             feature_count_overall = sum(feature_present, na.rm = TRUE),
@@ -946,7 +1274,7 @@ protein_calls_long %>%
 ```{r}
 
 
-protein_calls_long %>%
+protein_calls_long_by_seq_id %>%
   mutate(has_cancer = stage != "normal" ) %>%
   group_by(seq_id, has_cancer) %>%
   summarize(total_num_pts_recognizing = sum(number_of_pts_recognizing)) %>%
@@ -955,8 +1283,8 @@ protein_calls_long %>%
   pivot_wider(-total_num_pts_recognizing, names_from = has_cancer, values_from = recognized_once) %>%
   rename(recognized_by_normal = "FALSE",
          recognized_by_cancer = "TRUE") %>%
-  right_join(protein_calls_long, by = "seq_id") %>%
-  filter(stage == "met") %>%
+  right_join(protein_calls_long_by_seq_id, by = "seq_id") %>%
+  filter(stage == "mCRPC") %>%
   pivot_longer(nucleus:transcription_factor, names_to = "feature", values_to = "feature_present") %>%
   group_by(feature) %>%
   summarize(pct_feature_present_overall = sum(feature_present, na.rm = TRUE)/n_distinct(seq_id),
@@ -966,7 +1294,7 @@ protein_calls_long %>%
             pct_normal_feature = normal_feature_count / feature_count_overall,
             pct_cancer_feature = cancer_feature_count / feature_count_overall) %>%
   ungroup() %>%
-  mutate(feature = fct_reorder(feature, pct_feature_present_overall)) %>%
+  mutate(feature = fct_reorder(feature, pct_feature_present_overall)) %>% 
   ggplot(aes(x=feature, y = pct_feature_present_overall)) +
   geom_col() +
   geom_col(aes(x = feature, y = pct_cancer_feature*pct_feature_present_overall), fill = "lightcoral") + 
@@ -991,20 +1319,27 @@ protein_calls_long %>%
 # also look at normal only proteins (not sure if they exist)
 
 
-cancer_only_proteins = protein_calls %>% 
+cancer_only_proteins = protein_calls_short_by_seq_id %>% 
   group_by(seq_id) %>%
-  summarize(cancer_sum = sum(castration_resistant_met, castration_resistant_non_met, met, new_dx, normal),
+  summarize(cancer_sum = sum(mCRPC, nmCRPC, new_dx, nmCSPC),
             normal = normal) %>%
   filter(cancer_sum > 0, normal == 0) %>%
   select(seq_id)
 
-# protein_calls_long %>%
+# protein_calls_long_by_seq_id %>%
 #   filter(seq_id %in% cancer_only_proteins$seq_id) %>%
 #   distinct(uniprot_id) %>%
 #   write_csv("cancer_only_proteins.csv", col_names = FALSE)
 
 #abnormal_proteins %in% cancer_only_proteins$seq_id
 
+
+normal_only_proteins = protein_calls_short_by_seq_id %>% 
+  group_by(seq_id) %>%
+  summarize(cancer_sum = sum(mCRPC, nmCRPC, new_dx, nmCSPC),
+            normal = normal) %>%
+  filter(cancer_sum == 0, normal > 0) %>%
+  select(seq_id)
 
 ```
 
@@ -1180,14 +1515,13 @@ fold_change %>%
 ```{r}
 # make a simple scatterplot: expression level vs frequency of recognition in each stage
 
-#8 proteins don't have unigene ids?
 unigene_to_prot %>% 
   select(seq_id, uni_gene_id) %>%
   anti_join(protein_calls_long_by_pt, by = "seq_id")
 
 unigene_to_prot %>%
   select(seq_id, uni_gene_id) %>%
-  right_join(protein_calls_long, by = "seq_id") %>%
+  right_join(protein_calls_long_by_seq_id, by = "seq_id") %>%
   filter(!is.na(uni_gene_id)) %>%
   left_join(protein_expression, by = "uni_gene_id") %>%
   ggplot(aes(x=metastases_adeno, y = pct_pts_recognizing)) + 
@@ -1198,7 +1532,7 @@ unigene_to_prot %>%
 
 unigene_to_prot %>%
   select(seq_id, uni_gene_id) %>%
-  right_join(protein_calls_long, by = "seq_id") %>%
+  right_join(protein_calls_long_by_seq_id, by = "seq_id") %>%
   filter(!is.na(uni_gene_id)) %>%
   left_join(protein_expression, by = "uni_gene_id") %>%
   ggplot(aes(x=metastases_ne, y = pct_pts_recognizing)) + 
@@ -1210,16 +1544,16 @@ unigene_to_prot %>%
 # lump into cancer vs noncancer
 unigene_to_prot %>%
   select(seq_id, uni_gene_id) %>%
-  right_join(protein_calls_long, by = "seq_id") %>%
+  right_join(protein_calls_long_by_seq_id, by = "seq_id") %>%
   filter(!is.na(uni_gene_id)) %>%
   left_join(protein_expression, by = "uni_gene_id") %>%
   mutate(stage = fct_recode(stage, 
                             normal = "normal",
                             cancer= "new_dx",
-                            cancer = "met",
-                            cancer = "psa_recurrent",
-                            cancer = "castration_resistant_non_met",
-                            cancer = "castration_resistant_met")) %>%
+                            cancer = "mCSPC",
+                            cancer = "nmCSPC",
+                            cancer = "nmCRPC",
+                            cancer = "mCRPC")) %>%
   ggplot(aes(x=metastases_ne, y = pct_pts_recognizing)) + 
   geom_point() +
   scale_x_log10() + 
@@ -1284,11 +1618,11 @@ protein_calls_long %>%
   write_delim("abnormal_proteins_unigene.csv", col_names = FALSE, delim = ",")
 
 
-castration_resistant_met_enriched %>%
+mCRPC_enriched %>%
   left_join(unigene_to_prot, by = "seq_id") %>% 
   filter(!is.na(uni_gene_id)) %>%
   select(uni_gene_id) %>% 
-  write_delim("castration_resistant_met_enriched.csv", col_names = FALSE, delim = ",")
+  write_delim("mCRPC_enriched.csv", col_names = FALSE, delim = ",")
 
 
 fold_change %>%
@@ -1619,10 +1953,10 @@ survivor_enriched %>%
 ```{r}
 
 #PSA
-protein_calls_long %>%
+protein_calls_long_by_seq_id %>%
   filter(str_detect(uniprot_id, "P07288"))
 
-protein_calls_long %>%
+protein_calls_long_by_seq_id %>%
   filter(str_detect(uniprot_id, "P07288")) %>%
   group_by(stage == "normal") %>%
   summarize(total_pts_recognizing = sum(number_of_pts_recognizing), 
@@ -1631,30 +1965,318 @@ protein_calls_long %>%
   
  
 #PAP 
-protein_calls_long %>%
+protein_calls_long_by_seq_id %>%
   filter(str_detect(uniprot_id, "P15309"))
 
-protein_calls_long %>%
+protein_calls_long_by_seq_id %>%
   filter(str_detect(uniprot_id, "P15309")) %>%
   group_by(stage == "normal") %>%
   summarize(total_pts_recognizing = sum(number_of_pts_recognizing), 
             total_sample_size = sum(sample_size),
             total_pct = total_pts_recognizing/total_sample_size)
 
-
-# p53
-protein_calls_long %>%
-  filter(str_detect(uniprot_id, "P04637"))
-
-#HER2/Neu
-protein_calls_long %>%
-  filter(str_detect(uniprot_id, "P04626"))
-
 #AR
-protein_calls_long %>%
-  filter(str_detect(uniprot_id, "P10275"))
+protein_calls_long_by_seq_id %>%
+  filter(str_detect(seq_id, "2_AR_367"))
+
+protein_calls_long_by_seq_id %>%
+  filter(str_detect(seq_id, "2_AR_367")) %>%
+  group_by(stage == "normal") %>%
+  summarize(total_pts_recognizing = sum(number_of_pts_recognizing), 
+            total_sample_size = sum(sample_size),
+            total_pct = total_pts_recognizing/total_sample_size)
 
 ```
+
+
+## Bringing in ADT vs PAP data
+
+```{r eval = FALSE}
+# aggregated calls from proj 2
+aggregated_calls_proj2 = read_tsv("Aggregated_calls_proj_2.txt")
+
+calls_proj2_long = aggregated_calls_proj2 %>% 
+  pivot_longer(contains(".dat"), names_to = "array_id", values_to = "is_recognized")
+
+
+missing_nmscpc_ids  = c("adt006", "adt017", "adt025", "adt100","adt115","adt293", "adt311")
+
+missing_nmcspc_array_ids = array_id_key_proj2 %>%
+  filter(id %in% missing_nmscpc_ids, time == 0) %>%
+  select(file_name) %>%
+  as_vector() %>%
+  unname()
+
+missing_calls_long = aggregated_calls_proj2 %>%
+  select(SEQ_ID:SEQ_ID.CONTAINER, all_of(missing_nmcspc_array_ids)) %>% 
+  pivot_longer(contains(".dat"), names_to = "array_id", values_to = "is_recognized") %>% 
+  janitor::clean_names()
+
+missing_calls_short = missing_calls_long %>%
+  left_join(array_id_key_proj2, by = c("array_id" = "file_name")) %>%
+  group_by(seq_id, probe_id, container, probe_sequence, position, seq_id_container, id) %>%
+  summarize(num_recognized = sum(is_recognized)) %>% 
+  ungroup() %>%
+  mutate(is_recognized = as.integer(num_recognized >= 2)) %>%
+  select(-num_recognized) %>%
+  pivot_wider(names_from = "id", values_from = "is_recognized") %>%
+  select(matches("[a-z]{3}[0-9]{3}"))
+  
+calls %>%
+  bind_cols(missing_calls_short) %>% 
+  write_csv("aggregated_calls_full_nmcspc.csv")
+
+array_id_key_proj2 %>%
+  filter(id %in% missing_nmscpc, time == 0) %>% 
+  write_csv("test.csv")
+
+# now need to update complete_raw_data.csv
+```
+
+
+```{r}
+# correlation
+
+array_id_key_proj2 = read_tsv("sample_key_project2.txt") %>%
+  janitor::clean_names() %>% 
+  mutate(id = tolower(id))
+
+sample_key_proj2 = array_id_key_proj2 %>%
+  group_by(id, condition, time) %>% 
+  summarize(n = n()) %>%
+  ungroup() %>%
+  filter(n>=2) %>% 
+  count(id) %>%
+  mutate(id = tolower(id))
+  
+
+array_id_key_proj2 = array_id_key_proj2 %>% 
+  filter(id %in% sample_key_proj2$id)
+
+corr_matrix_proj2 = read_csv("correlation_matrix_proj2.csv") %>%
+  rename(array_id_1 = X1) 
+
+corr_long_proj2 = corr_matrix_proj2 %>%
+  pivot_longer(contains(".dat"), names_to = "array_id_2", values_to = "coefficient") %>%
+  right_join(array_id_key_proj2, by = c(array_id_1 = "file_name")) %>%
+  rename(index_1 = index, 
+         treatment_1 = condition,
+         additional_id_1 = additional_id,
+         id_1 = id,
+         rep_1 = rep,
+         time_1 = time) %>%
+  right_join(array_id_key_proj2, by = c(array_id_2 = "file_name")) %>%
+   rename(index_2 = index, 
+         treatment_2 = condition,
+         additional_id_2 = additional_id,
+         id_2 = id,
+         rep_2 = rep,
+         time_2 = time)
+
+
+
+corr_rep_proj2 = corr_long_proj2 %>%
+  filter(id_1==id_2, array_id_1 != array_id_2, time_1 == time_2) %>%
+  mutate(fisher_z = 0.5*(log(1+coefficient) - log(1-coefficient))) %>%
+   summarize(sd = sd(coefficient),
+            mean_correlation_z = mean(fisher_z),
+            mean_correlation = (exp(2*mean_correlation_z) - 1) / (exp(2*mean_correlation_z) + 1),
+            n = n(), 
+            se = 1/sqrt(n-3),
+            label = "Replicate")
+
+corr_same_proj2 = corr_long_proj2 %>%
+  filter(id_1==id_2, array_id_1 != array_id_2) %>%
+  mutate(fisher_z = 0.5*(log(1+coefficient) - log(1-coefficient))) %>%
+  summarize(sd = sd(coefficient),
+            mean_correlation_z = mean(fisher_z),
+            mean_correlation = (exp(2*mean_correlation_z) - 1) / (exp(2*mean_correlation_z) + 1),
+            n = n(), 
+            se = 1/sqrt(n-3),
+            label = "Same patient")
+
+corr_long_proj2 %>%
+  filter(id_1 != id_2, time_1 == time_2) %>%
+  mutate(fisher_z = 0.5*(log(1+coefficient) - log(1-coefficient))) %>%
+  summarize(sd = sd(coefficient),
+            mean_correlation_z = mean(fisher_z),
+            mean_correlation = (exp(2*mean_correlation_z) - 1) / (exp(2*mean_correlation_z) + 1),
+            n = n(), 
+            se = 1/sqrt(n-3),
+            label = "Average Pair") %>%
+  bind_rows(corr_rep_proj2, corr_same_proj2) %>%
+  mutate(label = fct_reorder(label, mean_correlation)) %>%
+  ggplot(aes(x=label, y = mean_correlation)) +
+  geom_col(fill = "black") + 
+  geom_errorbar(aes(ymin = mean_correlation-sd, ymax = mean_correlation+sd), width = .5) +
+  labs(x = "",
+       y = "Correlation Coefficient") +
+   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+
+```{r}
+# by epitope
+
+group_comparison_by_epitope = read_tsv("group_comparisons_by_epitopes.txt") %>%
+  janitor::clean_names() %>%
+  rename(adt_pts_increased_reactivity = number_of_adt_treated_patients_with_significant_increased_reactivity,
+         vaccine_pts_increased_reactivity = number_of_vaccine_treated_patients_with_significant_increased_reactivity) %>%
+  left_join(uniprot_data_extracted, by = "seq_id") 
+
+
+group_comparison_by_epitope %>%
+  mutate(ribosomal_flag = case_when(
+    ribosomal == TRUE ~ "ribosomal", 
+    ribosomal == FALSE ~ "non-ribosomal",
+    is.na(ribosomal) ~ "non-ribosomal"
+  )) %>% 
+  ggplot(aes(x = vaccine_pts_increased_reactivity, y = adt_pts_increased_reactivity, color = ribosomal_flag)) +
+  geom_jitter(width = 0.2, height = 0.2) +
+  geom_abline(slope = 1, lty = 2, color = "red") + 
+  scale_color_manual(values = c("grey", "blue")) +
+  scale_y_continuous(labels = scales::label_number(accuracy = 1), breaks = scales::breaks_pretty(n = 3)) + 
+  labs(x = "Number of PAP pts with increasing recognition",
+       y = "Number of ADT pts with increasing recognition",
+       color = "")
+```
+
+
+```{r}
+# summarizing per epitope level data to the protein level
+
+increased_per_epitope = read_tsv("per_epitope_lms_signif_vs_signal.txt") %>%
+  janitor::clean_names()
+
+increased_proteins = increased_per_epitope %>%
+  rename(id = "pt_id") %>%
+  group_by(seq_id, condition, id) %>%
+  summarize(is_prot_recognized = n() > 0) %>%
+  ungroup() %>% 
+  group_by(seq_id, condition) %>%
+  summarize(number_pts_recognizing = n()) %>% 
+  ungroup() %>%
+  pivot_wider(names_from = "condition", values_from = "number_pts_recognizing") %>%
+  janitor::clean_names() %>%
+  right_join(uniprot_data_extracted, by = "seq_id") %>%
+  replace_na(list(vaccine = 0, adt = 0)) 
+  
+increased_proteins %>%  mutate(ribosomal_flag = case_when(
+    ribosomal == TRUE ~ "ribosomal", 
+    ribosomal == FALSE ~ "non-ribosomal",
+    is.na(ribosomal) ~ "non-ribosomal"
+  )) %>%  
+  ggplot(aes(x = vaccine, y = adt, color = ribosomal_flag)) +
+  geom_jitter(width = 0.2, height = 0.2, alpha = 0.7) +
+  geom_abline(slope = 1, lty = 2, color = "black") + 
+  scale_color_manual(values = c("grey", "#F8766D")) +
+  scale_y_continuous(labels = scales::label_number(accuracy = 1), breaks = scales::breaks_pretty(n = 3)) + 
+  labs(x = "Number of PAP pts with increasing recognition",
+       y = "Number of ADT pts with increasing recognition",
+       color = "")
+```
+
+```{r}
+# find out how many proteins are statistically more recognized by PAP than ADT pts using fisher's exact test
+
+fisher_test = function(data) {
+  fisher.test(matrix(c(data$adt, data$adt_n - data$adt, 
+                     data$vaccine, data$vaccine_n - data$vaccine), ncol = 2))
+}
+
+
+vaccine_increased_proteins = increased_proteins %>%
+  mutate(adt_n = 20,
+         vaccine_n = 20) %>%
+  group_by(seq_id) %>%
+  nest() %>%
+  mutate(fisher_test_result = map(data, fisher_test),
+         tidied = map(fisher_test_result, tidy)) %>% 
+  unnest(tidied) %>% 
+  filter(p.value < 0.05, estimate < 1)
+
+vaccine_increased_proteins %>%
+  select(seq_id, data) %>%
+  unnest(data) %>%
+  ungroup() %>%
+  select(uniprot_id) %>%
+  write_csv("vaccine_increased_ids.csv", col_names = FALSE)
+
+```
+
+
+
+```{r eval = FALSE}
+# write hits to .csv for GO analysis
+
+
+```
+
+
+```{r}
+
+# revigo_names = c("term_ID","description","frequency","plot_X","plot_Y","plot_size","log10_p_value","uniqueness","dispensability")
+# 
+# revigo_data <- rbind(c("GO:0006325","chromatin organization", 0.668, 4.046, 5.226, 4.933,-10.0205,0.622,0.000),
+# c("GO:0070972","protein localization to endoplasmic reticulum", 0.187, 1.646,-5.382, 4.381,-4.2848,0.702,0.000),
+# c("GO:0098900","regulation of action potential", 0.008, 4.184,-1.447, 2.993,-3.0227,0.868,0.000),
+# c("GO:0006413","translational initiation", 0.518,-4.495, 4.888, 4.823,-5.5482,0.637,0.032),
+# c("GO:0000184","nuclear-transcribed mRNA catabolic process, nonsense-mediated decay", 0.030,-5.165,-3.573, 3.588,-4.1198,0.690,0.106),
+# c("GO:0019083","viral transcription", 0.012,-3.310,-0.444, 3.203,-4.8386,0.744,0.184),
+# c("GO:0034470","ncRNA processing", 2.222,-4.742, 1.224, 5.455,-3.0645,0.631,0.288),
+# c("GO:0016071","mRNA metabolic process", 0.798,-5.734,-1.296, 5.010,-3.0570,0.706,0.357),
+# c("GO:0090304","nucleic acid metabolic process",21.449,-6.177, 1.439, 6.440,-4.7496,0.643,0.364),
+# c("GO:0034645","cellular macromolecule biosynthetic process",19.291,-5.413, 3.234, 6.394,-3.9172,0.661,0.380),
+# c("GO:0002181","cytoplasmic translation", 0.064,-4.059, 6.075, 3.915,-3.9031,0.689,0.429),
+# c("GO:0010468","regulation of gene expression",10.815,-2.628, 3.188, 6.142,-3.0540,0.677,0.433),
+# c("GO:0009059","macromolecule biosynthetic process",19.548,-6.217, 4.115, 6.399,-3.8633,0.728,0.506),
+# c("GO:1905268","negative regulation of chromatin organization", 0.025, 4.018, 3.465, 3.505,-3.8013,0.607,0.549),
+# c("GO:0016070","RNA metabolic process",15.951,-5.762, 0.811, 6.311,-3.4283,0.629,0.577),
+# c("GO:0006139","nucleobase-containing compound metabolic process",26.547,-6.819, 0.305, 6.532,-3.1057,0.677,0.597),
+# c("GO:0071168","protein localization to chromatin", 0.006, 1.179,-5.664, 2.919,-3.0227,0.744,0.637),
+# c("GO:0065004","protein-DNA complex assembly", 0.200, 4.502, 4.340, 4.408,-5.7696,0.610,0.651),
+# c("GO:0071824","protein-DNA complex subunit organization", 0.238, 4.254, 4.841, 4.485,-5.4157,0.644,0.661),
+# c("GO:0006412","translation", 5.686,-4.781, 3.567, 5.863,-4.4908,0.546,0.661));
+# 
+# 
+# 
+# 
+# revigo_data = revigo_data %>%
+#   as_tibble(.name_repair = ~revigo_names) %>%
+#   janitor::clean_names() %>%
+#   type_convert()
+# 
+# revigo_data %>%
+#   mutate() %>% 
+#   ggplot(aes(x = plot_x, y = plot_y, color = log10_p_value, size = plot_size), alpha = 0.6) +
+#   geom_point() +
+#   geom_text(data = . %>% 
+#               filter(log10_p_value < -4.2), 
+#             aes(label = str_wrap(description,5)), 
+#             size = 4,
+#             color = "black") + 
+#   scale_color_viridis() +
+#   scale_size_continuous(guide = "none") + 
+#   labs(x = "Semantic Space X",
+#        y = "Semantic Space Y",
+#        color = "Log10(p value)")
+```
+
+
+
+```{r eval = FALSE}
+group_comparison_by_epitope %>%
+  filter(vaccine_pts_increased_reactivity > 3) %>%
+  select(uniprot_id) %>%
+  filter(!is.na(uniprot_id)) %>%
+  write_csv("vaccine_increased_reactivity_epitope.csv", col_names = FALSE)
+```
+
+
+
+
 
 
 ```{r eval = FALSE}
@@ -1738,426 +2360,22 @@ raw_data_long %>%
   labs(x = "Position (amino acids)",
        y = "Fluorescence")
 
-```
-
-
-```{r}
-# load in all raw data
-
-run_0 = read_csv("Processed_aggregate_data.csv",
-                    col_types = cols(
-                        .default = col_double(),
-                        PROBE_DESIGN_ID = col_character(),
-                        CONTAINER = col_character(),
-                        DESIGN_NOTE = col_logical(),
-                        SELECTION_CRITERIA = col_logical(),
-                        SEQ_ID = col_character(),
-                        PROBE_SEQUENCE = col_character(),
-                        PROBE_CLASS = col_character(),
-                        PROBE_ID = col_character()
-                    )
-)
-
-run_1 = read_tsv("Processed_aggregate_data_1st_run.tab",
-                 col_types = cols(
-                        .default = col_double(),
-                        PROBE_DESIGN_ID = col_character(),
-                        CONTAINER = col_character(),
-                        DESIGN_NOTE = col_logical(),
-                        SELECTION_CRITERIA = col_logical(),
-                        SEQ_ID = col_character(),
-                        PROBE_SEQUENCE = col_character(),
-                        PROBE_CLASS = col_character(),
-                        PROBE_ID = col_character()
-                    )
-) %>% select(contains("dat"))
-
-run_2 = read_tsv("Processed_aggregate_data_run_2.txt",
-                 col_types = cols(
-                        .default = col_double(),
-                        PROBE_DESIGN_ID = col_character(),
-                        CONTAINER = col_character(),
-                        DESIGN_NOTE = col_logical(),
-                        SELECTION_CRITERIA = col_logical(),
-                        SEQ_ID = col_character(),
-                        PROBE_SEQUENCE = col_character(),
-                        PROBE_CLASS = col_character(),
-                        PROBE_ID = col_character()
-                    )
-) %>%
-  select(contains("dat"))
-
-raw_data = run_0 %>%
-  bind_cols(run_1) %>%
-  bind_cols(run_2) 
-  
-raw_data_long = raw_data %>% 
-  select(PROBE_DESIGN_ID:Y, any_of(array_id_key$array_id)) %>%
-  pivot_longer(cols = contains("dat"), names_to = "array_id", values_to = "fluorescence") %>%
-  janitor::clean_names() %>%
-  left_join(array_id_key, by = "array_id")
-
-# flagged_pt = 
-#   tribble(
-#     ~id_1,         ~id_2,     ~flag,
-#     "MCV005",      "PDV004",      "same",
-#     "MCV119",      "ARV003",      "same",
-#     "MCV083",      "PAP092",      "same",
-#     "MCV003",      "PAP032",      "same",
-#     "ADT034",      "PAP079",      "same",
-#     "ADT181",      "PAP001",      "same",
-#     "ADT223",      "PAP054",      "same",
-#     "VPD037",      "PDV008",      "same",
-#     "PAP123",      "VPD041",      "same",
-#     "PAP067",      "VPD016",      "same",
-#     "ADT143",      "PDV104",      "same",
-#     "IPP51514151", "IPP5096",     "mixup",
-#     "PDV087",      "IPP51514151", "mixup",
-#     "PDV093",      "PDV087",      "mixup",
-#     "VPD053",      "VPD068",      "mixup",
-#     "VPD068",      "IMA187613",   "mixup",
-#     "VPD056",      "IP1131",      "mixup"
-#   ) %>%
-#   mutate_all(.funs = ~tolower(.))
-
-ids_to_remove = c("pdv004", 
-                  "arv003",
-                  "pap092",
-                  "pap032",
-                  "adt034",
-                  "adt181",
-                  "adt223",
-                  "pdv008",
-                  "pap123",
-                  "pap067",
-                  "adt143")
-
-raw_data_long = raw_data_long %>% 
-  filter(!(id %in% ids_to_remove))
-
-array_id_key_removed = array_id_key %>%
-  filter(!(id %in% ids_to_remove))
-
-
-sample_key_removed = sample_key %>%
-  filter(!(id %in% ids_to_remove))
-
-#looks like I have all the data finally
-# file_names = raw_data %>%
-#   bind_cols(run_1) %>%
-#   bind_cols(run_2) %>%
-#   select(contains("dat")) %>%
-#   names()
-# 
-# file_names %>% 
-#   enframe(name = "test", value = "array_id") %>%
-#   right_join(array_id_key) %>% 
-#   filter(is.na(test))
-
-
-```
-
-```{r}
-# PCA with and without log2 transformation
-raw_data_matrix = raw_data_long %>%
-  select(array_id, probe_id, fluorescence) %>%
-  pivot_wider(names_from = "probe_id", values_from = "fluorescence") %>%
-  column_to_rownames("array_id") %>%
-  as.matrix
-
-pca_result = prcomp(raw_data_matrix, center = TRUE, scale = TRUE)
-
-tidy(pca_result, "pcs") %>%
-  ggplot(aes(x= PC, y = cumulative)) +
-  geom_col() + 
-  scale_y_continuous(labels = scales::percent_format())
-
-tidy(pca_result, "samples") 
-  
-
-test = augment(pca_result, data = array_id_key_removed) %>%
-  ggplot(aes(x = .fittedPC1, y = .fittedPC2, label = array_id)) + 
-  geom_point()
-  
-ggplotly(test)
-
-
-raw_data_log_matrix = raw_data_long %>%
-  mutate(log2_fluorescence = log2(fluorescence)) %>%
-  select(array_id, probe_id, log2_fluorescence) %>%
-  pivot_wider(names_from = "probe_id", values_from = "log2_fluorescence") %>%
-  column_to_rownames("array_id") %>%
-  as.matrix
-
-pca_log_result = prcomp(raw_data_log_matrix, center = TRUE, scale = TRUE)
-
-tidy(pca_log_result, "pcs") %>%
-  ggplot(aes(x= PC, y = cumulative)) +
-  geom_col() + 
-  scale_y_continuous(labels = scales::percent_format())
-
-
-array_id_key_removed %>%
-  left_join(sample_key_removed, by = "id") %>%
-  augment(pca_log_result, data = .) %>% 
-  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage, shape = stage)) + 
-  geom_point()
-
-```
-
-
-```{r}
-# UMAP with and without log2 transformation
-
-umap_result = umap(normalize_input(raw_data_matrix))
-
-umap_result$layout %>%
-  as_tibble(.name_repair = "unique", rownames = "array_id") %>%
-  rename(x = ...1, y = ...2) %>% 
-  right_join(array_id_key_removed, by = "array_id") %>%
-  right_join(sample_key_removed, by = "id") %>%
-  ggplot(aes(x=x, y=y, color = stage)) +
-  geom_point() + 
-  theme_void()
-
-umap_log_result = umap(normalize_input(raw_data_log_matrix))
-
-
-umap_log_result$layout %>%
-  as_tibble(.name_repair = "unique", rownames = "array_id") %>%
-  rename(x = ...1, y = ...2) %>% 
-  right_join(array_id_key_removed, by = "array_id") %>%
-  right_join(sample_key_removed, by = "id") %>%
-  ggplot(aes(x=x, y=y, color = stage, shape = stage)) +
-  geom_point() + 
-  theme_void()
-
-```
-
-```{r}
-# average the triplicates then perform PCA
-
-raw_data_long_averaged = raw_data_long %>%
-  group_by(id, probe_id) %>%
-  summarize(mean_fluorescence = mean(fluorescence))
-
-
-raw_data_averaged_matrix = raw_data_long_averaged %>%
-  pivot_wider(names_from = "probe_id", values_from = "mean_fluorescence") %>%
-  column_to_rownames("id") %>%
-  as.matrix
-
-pca_averaged_result = prcomp(raw_data_averaged_matrix, center = TRUE, scale = TRUE)
-
-tidy(pca_averaged_result, "pcs") %>%
-  ggplot(aes(x= PC, y = cumulative)) +
-  geom_col() + 
-  scale_y_continuous(labels = scales::percent_format())
-
-sample_key_removed %>% 
-  filter(!is.na(id)) %>%
-  augment(pca_averaged_result, data = .) %>% 
-  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage)) + 
-  geom_point()
-
-raw_data_log_averaged = raw_data_long %>%
-  mutate(log2_fluorescence = log2(fluorescence)) %>%
-  group_by(id, probe_id) %>%
-  summarize(mean_fluorescence = mean(log2_fluorescence))
-
-raw_data_log_averaged_matrix = raw_data_log_averaged %>%
-  pivot_wider(names_from = "probe_id", values_from = "mean_fluorescence") %>%
-  column_to_rownames("id") %>%
-  as.matrix
-
-
-pca_log_averaged_result = prcomp(raw_data_log_averaged_matrix, center = TRUE, scale = TRUE)
-
-
-tidy(pca_log_averaged_result, "pcs") %>%
-  ggplot(aes(x= PC, y = cumulative)) +
-  geom_col() + 
-  scale_y_continuous(labels = scales::percent_format())
-
-sample_key_removed %>% 
-  filter(!is.na(id)) %>%
-  augment(pca_log_averaged_result, data = .) %>% 
-  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage)) + 
-  geom_point()
-
-```
-
-```{r}
-# PCA taking max of each peptide
-
-raw_data_max = raw_data_long %>%
-  select(probe_id, seq_id) %>%
-  distinct() %>%
-  right_join(raw_data_long_averaged, by = "probe_id") %>%
-  group_by(seq_id, id) %>%
-  summarize(max_fluorescence = max(mean_fluorescence))
-
-raw_data_max_matrix = raw_data_max %>%
-  pivot_wider(names_from = "seq_id", values_from = "max_fluorescence") %>%
-  column_to_rownames("id") %>%
-  as.matrix
-  
-pca_max_result = prcomp(raw_data_max_matrix, center = TRUE, scale = TRUE)
-
-tidy(pca_max_result, "pcs") %>%
-  ggplot(aes(x= PC, y = cumulative)) +
-  geom_col() + 
-  scale_y_continuous(labels = scales::percent_format())
-
-
-sample_key_removed %>% 
-  filter(!is.na(id)) %>%
-  augment(pca_max_result, data = .) %>% 
-  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage)) + 
-  geom_point()
-
-
-
-
-raw_data_log_max = raw_data_long %>%
-  select(probe_id, seq_id) %>%
-  distinct() %>%
-  right_join(raw_data_log_averaged, by = "probe_id") %>%
-  group_by(seq_id, id) %>%
-  summarize(max_fluorescence = max(mean_fluorescence))
-
-raw_data_log_max_matrix = raw_data_log_max %>%
-  pivot_wider(names_from = "seq_id", values_from = "max_fluorescence") %>%
-  column_to_rownames("id") %>%
-  as.matrix
-  
-pca_log_max_result = prcomp(raw_data_log_max_matrix, center = TRUE, scale = TRUE)
-
-tidy(pca_log_max_result, "pcs") %>%
-  ggplot(aes(x= PC, y = cumulative)) +
-  geom_col() + 
-  scale_y_continuous(labels = scales::percent_format())
-
-
-sample_key_removed %>% 
-  filter(!is.na(id)) %>%
-  augment(pca_log_max_result, data = .) %>% 
-  ggplot(aes(x = .fittedPC1, y = .fittedPC2, color = stage)) + 
-  geom_point()
-
-
-```
-
-
-```{r}
-#umap on averaged triplicates
-
-umap_log_averaged_result = umap(normalize_input(raw_data_log_averaged_matrix))
-
-umap_log_averaged_result$layout %>%
-  as_tibble(.name_repair = "unique", rownames = "id") %>%
-  rename(x = ...1, y = ...2) %>% 
-  right_join(sample_key_removed, by = "id") %>%
-  ggplot(aes(x=x, y=y, color = stage, shape = stage)) +
-  geom_point() + 
-  theme_void()
-
-
-#umap on max of each protein
-umap_log_max_result = umap(normalize_input(raw_data_log_max_matrix))
-
-
-umap_log_max_result$layout %>%
-  as_tibble(.name_repair = "unique", rownames = "id") %>%
-  rename(x = ...1, y = ...2) %>% 
-  right_join(sample_key_removed, by = "id") %>%
-  ggplot(aes(x=x, y=y, color = stage, shape = stage)) +
-  geom_point() + 
-  theme_void()
-
-
-```
-
-
-```{r}
-#TSNE
-
-tsne_result = Rtsne(normalize_input(raw_data_log_matrix))
-
-
-tsne_result$Y %>%
-  as_tibble() %>%
-  bind_cols(array_id_key_removed) %>%
-  left_join(sample_key_removed, by = "id") %>%
-  ggplot(aes(x = V1, y = V2, color = stage, shape = stage)) + 
-  geom_point()
-
-
-tsne_averaged_result = Rtsne(normalize_input(raw_data_averaged_matrix))
-
-
-sample_key_removed %>%
-  filter(!is.na(id)) %>%
-  bind_cols(as_tibble(tsne_averaged_result$Y)) %>%
-  ggplot(aes(x = V1, y = V2, color = stage, shape = stage)) + 
-  geom_point()
-
-
-
-tsne_max_result = Rtsne(normalize_input(raw_data_log_max_matrix))
-
-sample_key_removed %>%
-  filter(!is.na(id)) %>%
-  bind_cols(as_tibble(tsne_max_result$Y)) %>%
-  ggplot(aes(x = V1, y = V2, color = stage, shape = stage)) + 
-  geom_point()
-
-
-```
-
-
-```{r}
-#hierarchical clustering
-library(factoextra)
-
-dissimilarity = dist(scale(raw_data_log_max_matrix), method = "euclidean")
-clust = hclust(dissimilarity, method = "complete")
-plot(clust, cex = 0.6, hang = -1)
-# rect.hclust(clust, k = 3, border = 2:6)
-
+raw_data %>%
+  rename(buffer = "215576_IgG_635_A12.dat",
+         position = POSITION) %>%
+  select(SEQ_ID, buffer, position) %>%
+  filter(SEQ_ID == "ADT14") %>%
+  ggplot(aes(x=position, y = buffer)) + 
+  geom_line(size = 1.1) +
+  geom_hline(yintercept = 2^12, lty = 2) + 
+  labs(x = "Position (amino acids)",
+       y = "Fluorescence")
 ```
 
 
 
 ```{r eval = FALSE}
 # Supp tables drafts
-
-# library(flextable)
-# library(officer)
-
-# table_prot = protein_calls_long %>%
-#   distinct(seq_id, .keep_all = TRUE) %>%
-#   left_join(unigene_to_prot, by = "seq_id") %>%
-#   select(seq_id, gene_names, protein_names, uni_gene_id, uniprot_id, length, subcellular_location_cc) %>%
-#   rename("Seq ID" = "seq_id",
-#          "Gene Names" = "gene_names",
-#          "Protein Names" = "protein_names",
-#          "Unigene ID" = "uni_gene_id",
-#          "Uniprot ID" = "uniprot_id",
-#          "Length" = "length",
-#          "Subcellular Localization" = "subcellular_location_cc") %>%
-#   slice(1:10) %>%
-#   flextable() %>%
-#   autofit() %>%
-#   theme_zebra() %>%
-#   padding(j = ~Length, padding.right = 10, part = "all") %>%
-#   fontsize(part = "header", size = 14)
-# 
-# doc = read_docx()
-# 
-# doc %>%
-#   body_add_flextable(value = table_prot) %>%
-#   print(target = "test.docx")
 
 
 probe_list = read_csv("Entire aggregate list and peptides.csv")
@@ -2166,7 +2384,7 @@ probe_list = probe_list %>%
   janitor::clean_names() %>%
   select(seq_id, probe_sequence, position)
 
-protein_calls_long %>%
+protein_calls_long_by_seq_id %>%
   distinct(seq_id, .keep_all = TRUE) %>%
   left_join(unigene_to_prot, by = "seq_id") %>%
   select(seq_id, protein_names, uni_gene_id, uniprot_id, gene_names, length, subcellular_location_cc) %>%
@@ -2184,37 +2402,11 @@ protein_calls_long %>%
          "Subcellular Localization" = "subcellular_location_cc") %>%
   write_csv("supp table 1.csv")
   
-  #  kable() %>%
-  # collapse_rows() %>% 
-  # kable_styling(bootstrap_options = "striped")
 
-# 
-# protein_calls_long %>%
-#   distinct(seq_id, .keep_all = TRUE) %>%
-#   left_join(unigene_to_prot, by = "seq_id") %>%
-#   select(seq_id, protein_names, uni_gene_id, uniprot_id, gene_names, length, subcellular_location_cc) %>%
-#   left_join(probe_list, by = "seq_id") %>% 
-#   select(seq_id, probe_sequence, position, protein_names, uni_gene_id, uniprot_id, gene_names, length, subcellular_location_cc) %>% 
-#   arrange(seq_id, position) %>%
-#   rename("Seq ID" = "seq_id",
-#          "Probe Sequence" = "probe_sequence",
-#          "Position" = "position", 
-#          "Gene Names" = "gene_names",
-#          "Protein Names" = "protein_names",
-#          "Unigene ID" = "uni_gene_id",
-#          "Uniprot ID" = "uniprot_id",
-#          "Protein Length" = "length",
-#          "Subcellular Localization" = "subcellular_location_cc") %>%
-#   slice(1:1000) %>%
-#   kable("latex", booktabs = T) %>%
-#   collapse_rows() %>% 
-#   kable_styling(latex_options = "striped")
+#tables for normal proteins, never recognized proteins, cancer-exclusive proteins, normal-exclusive proteins, mCRPC enriched 
 
-#tables for normal proteins, never recognized proteins, cancer-exclusive proteins, castrate resistant met enriched 
-
-protein_calls_long %>%
+uniprot_data_extracted %>%
   filter(seq_id %in% normal_proteins) %>%
-  filter(stage == "met") %>%
   left_join(unigene_to_prot, by = "seq_id") %>%
   select(seq_id, protein_names, uni_gene_id, uniprot_id, gene_names, length, subcellular_location_cc) %>%
   arrange(seq_id) %>%
@@ -2229,9 +2421,8 @@ protein_calls_long %>%
   kable_styling(bootstrap_options = "striped")
 
 
-protein_calls_long %>%
+uniprot_data_extracted %>%
   filter(seq_id %in% never_recognized) %>%
-  filter(stage == "met") %>%
   left_join(unigene_to_prot, by = "seq_id") %>%
   select(seq_id, protein_names, uni_gene_id, uniprot_id, gene_names, length, subcellular_location_cc) %>%
   arrange(seq_id) %>%
@@ -2246,9 +2437,8 @@ protein_calls_long %>%
   kable_styling(bootstrap_options = "striped")
 
 
-protein_calls_long %>%
+uniprot_data_extracted %>%
   filter(seq_id %in% cancer_only_proteins$seq_id) %>%
-  filter(stage == "met") %>%
   left_join(unigene_to_prot, by = "seq_id") %>%
   select(seq_id, protein_names, uni_gene_id, uniprot_id, gene_names, length, subcellular_location_cc) %>%
   arrange(seq_id) %>%
@@ -2263,9 +2453,8 @@ protein_calls_long %>%
   kable_styling(bootstrap_options = "striped")
 
 
-protein_calls_long %>%
-  filter(seq_id %in% castration_resistant_met_enriched$seq_id) %>%
-  filter(stage == "met") %>%
+uniprot_data_extracted %>%
+  filter(seq_id %in% normal_only_proteins$seq_id) %>%
   left_join(unigene_to_prot, by = "seq_id") %>%
   select(seq_id, protein_names, uni_gene_id, uniprot_id, gene_names, length, subcellular_location_cc) %>%
   arrange(seq_id) %>%
@@ -2278,6 +2467,24 @@ protein_calls_long %>%
          "Subcellular Localization" = "subcellular_location_cc") %>%
   kable() %>%
   kable_styling(bootstrap_options = "striped")
+
+
+uniprot_data_extracted %>%
+  filter(seq_id %in% mCRPC_enriched$seq_id) %>%
+  left_join(unigene_to_prot, by = "seq_id") %>%
+  select(seq_id, protein_names, uni_gene_id, uniprot_id, gene_names, length, subcellular_location_cc) %>%
+  arrange(seq_id) %>%
+  rename("Seq ID" = "seq_id",
+         "Gene Names" = "gene_names",
+         "Protein Names" = "protein_names",
+         "Unigene ID" = "uni_gene_id",
+         "Uniprot ID" = "uniprot_id",
+         "Protein Length" = "length",
+         "Subcellular Localization" = "subcellular_location_cc") %>%
+  kable() %>%
+  kable_styling(bootstrap_options = "striped")
+
+
 
 
 ```
@@ -2297,14 +2504,13 @@ plot_subcel = uniprot_data_extracted %>%
   group_by(organelle) %>%
   summarize(pct_organelle_present = sum(organelle_present, na.rm = TRUE)/n_distinct(seq_id)) %>%
   mutate(organelle = fct_reorder(organelle, pct_organelle_present)) %>% 
-  ggplot(aes(x=organelle, y = pct_organelle_present)) +
+  ggplot(aes(x = pct_organelle_present, y = organelle)) +
   geom_col() +
-  coord_flip() +
-  scale_y_continuous(labels = scales::label_percent(), 
+  scale_x_continuous(labels = scales::label_percent(), 
                      breaks = scales::pretty_breaks(n = 3),
                      expand = c(0,0)) + 
-  labs(x = "",
-       y = "% of proteins")
+  labs(x = "% of proteins",
+       y = "")
 
 plot_length = uniprot_data_extracted %>%
   ggplot(aes(x=length)) +
@@ -2312,15 +2518,6 @@ plot_length = uniprot_data_extracted %>%
   scale_x_log10(labels = scales::label_comma()) + 
   labs(x = "Length of Protein (amino acids)",
        y = "Count")
-
-corr_summary = corr_long %>%
-  filter(id_1==id_2, array_id_1 != array_id_2) %>%
-  summarize(correlation = mean(coefficient), 
-            sd = sd(coefficient), 
-            n = n(), 
-            se = sd/sqrt(n),
-            label = "Replicate"
-            )
 
 corr_summary = corr_long %>%
   filter(id_1==id_2, array_id_1 != array_id_2) %>%
@@ -2350,23 +2547,13 @@ plot_replicate_corr = corr_long %>%
        y = "Correlation Coefficient") +
    theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-order = c("Normal", "New Dx", "Psa Recurrent", "Met", "Castration Resistant Non Met","Castration Resistant Met")
 
 plot_stage_corr = corr_long %>%
-  mutate(stage_1 = fct_recode(stage_1,
-                              "Normal" = "normal",
-                              "New Dx"  = "new_dx",
-                              "nmCSPC"  = "psa_recurrent",
-                              "mCSPC" = "met",
-                              "nmCRPC" = "castration_resistant_non_met",
-                              "mCRPC" = "castration_resistant_met"), 
-         stage_2 = fct_recode(stage_2,
-                              "Normal" = "normal",
-                              "New Dx"  = "new_dx",
-                              "nmCSPC"  = "psa_recurrent",
-                              "mCSPC" = "met",
-                              "nmCRPC" = "castration_resistant_non_met",
-                              "mCRPC" = "castration_resistant_met")) %>%
+  filter(!is.na(stage_1), !is.na(stage_2)) %>%
+  mutate(stage_1 = fct_relabel(stage_1, ~str_replace(., "normal", "Normal")) %>% 
+           fct_relabel(., ~str_replace(., "new_dx", "New Dx")),
+         stage_2 = fct_relabel(stage_2, ~str_replace(., "normal", "Normal")) %>% 
+           fct_relabel(., ~str_replace(., "new_dx", "New Dx"))) %>%
   group_by(stage_1, stage_2) %>%
   mutate(fisher_z = 0.5*(log(1+coefficient) - log(1-coefficient))) %>%
   summarize(
@@ -2395,10 +2582,40 @@ plot_self_corr = annotated_corr_long %>%
         axis.text.x = element_blank(),
         axis.ticks.x = element_blank())
   
+
+
+
+layout = "
+AAAABBBBBBB
+AAAABBBBBBB
+CCDDDDDDDDD
+EEDDDDDDDDD
+"
+
+wrap_elements(full = plot_subcel) + 
+  plot_length + 
+  plot_replicate_corr + 
+  plot_stage_corr + 
+  wrap_elements(plot = plot_self_corr) + 
+  plot_layout(design = layout) +
+  plot_annotation(tag_levels = "A") 
+
+ggsave("plots/fig_1.png", width = 12, height = 12, type = "cairo")
+
+#------------------------------------
+
+# temporary code to let me make this example figure on my laptop
+raw_data_long = raw_data %>% 
+  filter(SEQ_ID == "ADT14") %>%
+  select(PROBE_DESIGN_ID:Y, any_of(array_id_key$array_id)) %>%
+  pivot_longer(cols = contains("dat"), names_to = "array_id", values_to = "fluorescence") %>%
+  janitor::clean_names() %>%
+  right_join(array_id_key, by = "array_id")
+
 plot_example_call = raw_data_long %>%
   filter(seq_id == "ADT14",
-         file_name %in% c("215850_IgG_635_A04.dat", "217976_IgG_635_A04.dat", "217976_IgG_635_A10.dat")) %>%
-  mutate(rep = file_name %>%
+         array_id %in% c("215850_IgG_635_A04.dat", "217976_IgG_635_A04.dat", "217976_IgG_635_A10.dat")) %>%
+  mutate(rep = array_id %>%
            as_factor() %>%
            as.numeric()) %>% 
   ggplot(aes(x=position, y = fluorescence)) + 
@@ -2411,74 +2628,38 @@ plot_example_call = raw_data_long %>%
   labs(x = "Position (amino acids)",
        y = "Fluorescence")
 
-
-layout = "
-AAAABBBBBBB
-CCCDDDDDDDD
-EEEFFFFFFFF
-"
-
-wrap_elements(full = plot_subcel) + 
-  plot_length + plot_replicate_corr + 
-  wrap_elements(full = plot_stage_corr) + 
-  plot_self_corr + 
-  plot_example_call + 
-  plot_layout(design = layout) +
-  plot_annotation(tag_levels = "A") 
-
-ggsave("plots/fig_1.png", width = 12, height = 11, type = "cairo")
-
-#------------------------------------
-
 plot_pep_num = calls_by_stage %>% 
-  mutate(stage = fct_recode(stage,
-                            "Normal" = "normal",
-                            "New Dx"  = "new_dx",
-                            "nmCSPC"  = "psa_recurrent",
-                            "mCSPC" = "met",
-                            "nmCRPC" = "castration_resistant_non_met",
-                            "mCRPC" = "castration_resistant_met") %>%
+  mutate(stage = fct_relabel(stage, ~str_replace(., "normal", "Normal")) %>% 
+           fct_relabel(., ~str_replace(., "new_dx", "New Dx")) %>%
            fct_rev()) %>%
-  ggplot(aes(x = stage, y = number_recognized, color = stage)) + 
-  geom_jitter(width = .25) + 
-  coord_flip() +
+  ggplot(aes(x = number_recognized, y = stage, color = stage)) + 
+  geom_jitter(width = .25) +
   scale_fill_brewer("Set2") +
   theme(legend.position = "none") + 
-  labs(x = "",
-       y = "Number of peptides recognized")
+  labs(x = "Number of peptides recognized",
+       y = "")
 
 
-plot_prot_num = protein_calls_long_by_stage %>%
-  mutate(stage = fct_recode(stage,
-                            "Normal" = "normal",
-                            "New Dx"  = "new_dx",
-                            "nmCSPC"  = "psa_recurrent",
-                            "mCSPC" = "met",
-                            "nmCRPC" = "castration_resistant_non_met",
-                            "mCRPC" = "castration_resistant_met") %>%
+plot_prot_num = overall_protein_calls_long_by_stage %>%
+  mutate(stage = fct_relabel(stage, ~str_replace(., "normal", "Normal")) %>% 
+           fct_relabel(., ~str_replace(., "new_dx", "New Dx")) %>%
            fct_rev()) %>%
-  ggplot(aes(x = stage, y = number_recognized, color = stage)) +
-  geom_jitter(width = .25) + 
-  coord_flip() + 
+  ggplot(aes(x = number_recognized, y = stage, color = stage)) +
+  geom_jitter(width = .25) +
   scale_fill_brewer("Set2") + 
   theme(legend.position = "none") +
-  labs(x = "",
-       y = "Number of proteins recognized")
+  labs(x = "Number of proteins recognized",
+       y = "")
 
 
 
 plot_adeno_express = unigene_to_prot %>%
   select(seq_id, uni_gene_id) %>%
-  right_join(protein_calls_long, by = "seq_id") %>%
+  right_join(protein_calls_long_by_seq_id, by = "seq_id") %>%
   filter(!is.na(uni_gene_id)) %>%
   left_join(protein_expression, by = "uni_gene_id") %>%
-  mutate(stage = fct_recode(stage,
-                            "Normal" = "normal",
-                            "New Dx"  = "new_dx",
-                            "nmCSPC"  = "psa_recurrent",
-                            "mCSPC" = "met",
-                            "nmCRPC" = "castration_resistant_non_met",
-                            "mCRPC" = "castration_resistant_met")) %>%
+  mutate(stage = fct_relabel(stage, ~str_replace(., "normal", "Normal")) %>% 
+           fct_relabel(., ~str_replace(., "new_dx", "New Dx"))) %>%
   ggplot(aes(x=metastases_adeno, y = pct_pts_recognizing)) + 
   geom_point() +
   geom_smooth(method = "lm") + 
@@ -2491,23 +2672,29 @@ plot_adeno_express = unigene_to_prot %>%
     
 
 layout = "
-AABB
-AABB
-CCCC
-CCCC
-CCCC
+AAAA
+AAAA
+BBCC
+BBCC
+DDDD
+DDDD
+DDDD
+DDDD
 "
 
-plot_pep_num + plot_prot_num + wrap_elements(full = plot_adeno_express) + 
+plot_example_call + 
+  plot_pep_num + 
+  plot_prot_num + 
+  wrap_elements(full = plot_adeno_express) + 
   plot_layout(design = layout) + 
   plot_annotation(tag_levels = "A")
 
-ggsave("plots/fig_2.png", width = 11, height = 10, type = "cairo")
+ggsave("plots/fig_2.png", width = 11, height = 12, type = "cairo")
 
 
 #-----------------------------------
 
-plot_cancer_non_cancer_recognized = protein_calls_long %>%
+plot_cancer_non_cancer_recognized = protein_calls_long_by_seq_id %>%
   mutate(has_cancer = stage != "normal" ) %>%
   group_by(seq_id, has_cancer) %>%
   summarize(total_num_pts_recognizing = sum(number_of_pts_recognizing)) %>%
@@ -2515,9 +2702,8 @@ plot_cancer_non_cancer_recognized = protein_calls_long %>%
   mutate(recognized_once = total_num_pts_recognizing > 0) %>%
   pivot_wider(-total_num_pts_recognizing, names_from = has_cancer, values_from = recognized_once) %>%
   rename(recognized_by_normal = "FALSE",
-         recognized_by_cancer = "TRUE") %>%
-  right_join(protein_calls_long, by = "seq_id") %>% 
-  filter(stage == "met") %>% 
+         recognized_by_cancer = "TRUE") %>% 
+  right_join(uniprot_data_extracted, by = "seq_id") %>% 
   pivot_longer(nucleus:ribosomal, names_to = "feature", values_to = "feature_present") %>%
   group_by(feature) %>%
   summarize(pct_feature_present_overall = sum(feature_present, na.rm = TRUE)/n_distinct(seq_id),
@@ -2564,28 +2750,28 @@ plot_cancer_non_cancer_recognized = protein_calls_long %>%
    guides(fill = guide_legend(reverse = TRUE))
 
 
-plot_never_recognized = protein_calls_long %>% 
-  filter(seq_id %in% never_recognized, stage == "met") %>%
-  mutate(mtx = str_detect(protein_names, "metallothionein"))%>% 
-  group_by(seq_id) %>%
-  mutate(other = sum(mtx, ribosomal, lnc_rna, na.rm = TRUE) == 0) %>% 
-  ungroup() %>% 
-  pivot_longer(cols = c(mtx, ribosomal, lnc_rna, other), names_to = "feature", values_to = "feature_present") %>%
+plot_never_recognized = protein_calls_long_by_seq_id %>%
+  filter(seq_id %in% never_recognized, stage == "mCRPC") %>%
+  mutate(mtx = str_detect(protein_names, "metallothionein"))%>%
+  pivot_longer(nucleus:mtx, names_to = "feature", values_to = "feature_present") %>%
   group_by(feature) %>%
-  summarize(num_feature_present = sum(feature_present, na.rm = TRUE)) %>%
+  summarize(pct_feature_present = sum(feature_present, na.rm = TRUE) / length(never_recognized)) %>%
   ungroup() %>%
-  mutate(feature = fct_reorder(feature, num_feature_present) %>%
+  mutate(feature = fct_reorder(feature, pct_feature_present) %>%
+           fct_relabel(~str_replace_all(., "_", " ")) %>%
            fct_relabel(~str_to_title(.)) %>%
-           fct_relabel(~str_replace(., "Lnc_rna", "lncRNA")) %>%
-           fct_relabel(~str_replace(., "Mtx", "Metallothionein"))) %>% 
-  ggplot(aes(x=feature, y = num_feature_present)) +
+           fct_relabel(~str_replace(., "Er", "ER")) %>%
+           fct_relabel(~str_replace(., "Lnc Rna", "lncRNA")) %>%
+           fct_relabel(~str_replace(., "Mtx", "Metallothionein"))) %>%
+  ggplot(aes(x = pct_feature_present, y = feature)) +
   geom_col() +
-  scale_y_continuous(expand = c(0,0)) + 
-  coord_flip() +
-  labs(x = "",
-       y = "Number of proteins of each type")
+  scale_x_continuous(expand = c(0,0), 
+                     labels = scales::label_percent(),
+                     breaks = scales::breaks_pretty(n = 3)) +
+  labs(x = "% of proteins",
+       y = "")
 
-plot_normal_feat = protein_calls_long %>% 
+plot_normal_feat = protein_calls_long_by_seq_id %>% 
   filter(seq_id %in% normal_proteins) %>%
   pivot_longer(nucleus:transcription_factor, names_to = "feature", values_to = "feature_present") %>%
   mutate(feature = str_replace_all(feature, "_", " ") %>% 
@@ -2593,28 +2779,22 @@ plot_normal_feat = protein_calls_long %>%
            str_replace_all("Er", "ER") %>%
            str_replace_all("Lnc Rna", "lncRNA")) %>%
   group_by(feature) %>%
-  filter(!is.na(feature_present), stage == "met") %>%
+  filter(!is.na(feature_present), stage == "mCRPC") %>%
   summarize(pct_feature_present = sum(feature_present)/length(normal_proteins)) %>% 
   mutate(feature = fct_reorder(feature, pct_feature_present)) %>% 
-  ggplot(aes(x=feature, y = pct_feature_present)) +
+  ggplot(aes(x = pct_feature_present, y = feature)) +
   geom_col() +
-  coord_flip() +
-  scale_y_continuous(labels = scales::label_percent(),
+  scale_x_continuous(labels = scales::label_percent(),
                      expand = c(0,0)) + 
-  labs(x = "",
-       y = "% of proteins")
+  labs(x = "% of proteins",
+       y = "")
 
 
-plot_normal_hist = protein_calls_long %>% 
+plot_normal_hist = protein_calls_long_by_seq_id %>% 
   filter(seq_id %in% normal_proteins) %>% 
   filter(stage != "normal") %>% 
-  mutate(stage = fct_recode(stage,
-                            "Normal" = "normal",
-                            "New Dx"  = "new_dx",
-                            "nmCSPC"  = "psa_recurrent",
-                            "mCSPC" = "met",
-                            "nmCRPC" = "castration_resistant_non_met",
-                            "mCRPC" = "castration_resistant_met")) %>%
+  mutate(stage = fct_relabel(stage, ~str_replace(., "normal", "Normal")) %>% 
+           fct_relabel(., ~str_replace(., "new_dx", "New Dx"))) %>%
   ggplot(aes(x = pct_pts_recognizing)) +
   geom_histogram(binwidth = .1) +
   scale_x_continuous(labels = scales::label_percent(suffix = "")) + 
@@ -2649,32 +2829,20 @@ plot_cancer_exclusive_num = protein_calls_long_by_pt %>%
   group_by(stage, id) %>%
   summarize(number_recognized = n()) %>%
   ungroup() %>%
-  mutate(stage = fct_recode(stage,
-                            "Normal" = "normal",
-                            "New Dx"  = "new_dx",
-                            "nmCSPC"  = "psa_recurrent",
-                            "mCSPC" = "met",
-                            "nmCRPC" = "castration_resistant_non_met",
-                            "mCRPC" = "castration_resistant_met") %>%
+  mutate(stage = fct_relabel(stage, ~str_replace(., "new_dx", "New Dx")) %>% 
            fct_rev()) %>%
-  ggplot(aes(x = stage, y = number_recognized, color = stage)) +
-  geom_jitter(width = .25) + 
-  coord_flip() + 
+  ggplot(aes(x = number_recognized, y = stage, color = stage)) +
+  geom_jitter(width = .25) +
   theme(legend.position = "none") +
-  labs(x = "",
-       y = "Number of proteins recognized")
+  labs(x = "Number of proteins recognized",
+       y = "")
 
 
-plot_cancer_exclusive_hist = protein_calls_long %>% 
+plot_cancer_exclusive_hist = protein_calls_long_by_seq_id %>% 
   filter(seq_id %in% cancer_only_proteins$seq_id) %>% 
   filter(stage != "normal") %>% 
-  mutate(stage = fct_recode(stage,
-                            "Normal" = "normal",
-                            "New Dx"  = "new_dx",
-                            "nmCSPC"  = "psa_recurrent",
-                            "mCSPC" = "met",
-                            "nmCRPC" = "castration_resistant_non_met",
-                            "mCRPC" = "castration_resistant_met")) %>%
+  mutate(stage = fct_relabel(stage, ~str_replace(., "normal", "Normal")) %>% 
+           fct_relabel(., ~str_replace(., "new_dx", "New Dx"))) %>%
   ggplot(aes(x = pct_pts_recognizing)) +
   geom_histogram(binwidth = .1) +
   scale_x_continuous(labels = scales::label_percent(suffix = "", accuracy = 1),
@@ -2684,15 +2852,15 @@ plot_cancer_exclusive_hist = protein_calls_long %>%
   labs(x = "% of patients recognizing",
        y = "Count") 
 
-plot_castration_enriched_feat = protein_calls_long %>%
-  mutate(is_castrate_enriched = seq_id %in% castration_resistant_met_enriched$seq_id) %>% 
+plot_castration_enriched_feat = protein_calls_long_by_seq_id %>%
+  mutate(is_castrate_enriched = seq_id %in% mCRPC_enriched$seq_id) %>% 
   pivot_longer(nucleus:ribosomal, names_to = "feature", values_to = "feature_present") %>%
-  filter(stage == "met") %>%
+  filter(stage == "mCRPC") %>%
   group_by(feature) %>%
   summarize(pct_feature_present_overall = sum(feature_present, na.rm = TRUE)/n_distinct(seq_id),
             feature_count_overall = sum(feature_present, na.rm = TRUE),
             castrate_feature_count = sum(feature_present*is_castrate_enriched, na.rm = TRUE),
-            pct_castrate_feature = castrate_feature_count / length(castration_resistant_met_enriched$seq_id)) %>%
+            pct_castrate_feature = castrate_feature_count / length(mCRPC_enriched$seq_id)) %>%
   ungroup() %>%
   mutate(feature = fct_reorder(feature, pct_feature_present_overall) %>%
            fct_relabel(~str_replace_all(., "_", " ")) %>% 
@@ -2721,20 +2889,24 @@ plot_cancer_exclusive_component = cowplot::ggdraw() + cowplot::draw_image(img, s
 # size indicates the frequency of the GO term in the underlying GOA database (bubbles of more general terms are larger).
 # more negative p value means more significant
 
-revigo_names = c("term_ID","description","frequency","plot_X","plot_Y","plot_size","log10_p_value","uniqueness","dispensability")
-revigo_data = rbind(c("GO:0006605","protein targeting", 0.694, 5.019,-1.324, 4.949,-5.8697,0.409,0.000),
-c("GO:0019083","viral transcription", 0.012,-2.049,-5.133, 3.203,-5.5243,0.800,0.000),
-c("GO:0002756","MyD88-independent toll-like receptor signaling pathway", 0.002, 3.746, 5.185, 2.365,-3.9245,0.882,0.016),
-c("GO:0043603","cellular amide metabolic process", 6.879,-6.670,-0.120, 5.946,-3.5031,0.784,0.121),
-c("GO:0000184","nuclear-transcribed mRNA catabolic process, nonsense-mediated decay", 0.030,-2.906, 4.209, 3.588,-5.3206,0.623,0.180),
-c("GO:0006413","translational initiation", 0.518,-4.881,-4.190, 4.823,-4.5003,0.717,0.184),
-c("GO:1901566","organonitrogen compound biosynthetic process",14.064,-5.674,-2.582, 6.256,-3.4949,0.741,0.391),
-c("GO:0044271","cellular nitrogen compound biosynthetic process",22.502,-5.204,-1.111, 6.460,-3.1433,0.744,0.456),
-c("GO:0044270","cellular nitrogen compound catabolic process", 1.045,-4.048, 3.140, 5.127,-3.6819,0.593,0.523),
-c("GO:0015833","peptide transport", 0.298, 4.804,-2.469, 4.582,-4.1433,0.642,0.528),
-c("GO:1901361","organic cyclic compound catabolic process", 1.164,-2.283, 5.874, 5.174,-3.5017,0.672,0.640),
-c("GO:0006412","translation", 5.686,-4.696,-2.852, 5.863,-5.5850,0.650,0.661),
-c("GO:0042886","amide transport", 0.337, 4.569,-3.377, 4.636,-4.0947,0.716,0.689));
+
+
+revigo_names <- c("term_ID","description","frequency_%","plot_X","plot_Y","plot_size","log10_p_value","uniqueness","dispensability");
+revigo_data <- rbind(c("GO:0019083","viral transcription", 0.012, 1.704, 0.226, 3.203,-5.7100,0.798,0.000),
+c("GO:0070972","protein localization to endoplasmic reticulum", 0.187,-5.463, 0.233, 4.381,-6.2967,0.459,0.000),
+c("GO:0002756","MyD88-independent toll-like receptor signaling pathway", 0.002,-2.826,-5.740, 2.365,-3.5986,0.873,0.016),
+c("GO:0043603","cellular amide metabolic process", 6.879, 4.047, 5.457, 5.946,-5.0804,0.799,0.121),
+c("GO:0000184","nuclear-transcribed mRNA catabolic process, nonsense-mediated decay", 0.030, 3.843,-4.016, 3.588,-5.4815,0.665,0.180),
+c("GO:0006413","translational initiation", 0.518, 4.089, 3.798, 4.823,-4.5638,0.722,0.184),
+c("GO:0015833","peptide transport", 0.298,-5.248, 2.297, 4.582,-3.9957,0.651,0.227),
+c("GO:0006342","chromatin silencing", 0.087, 3.209,-0.418, 4.047,-4.5498,0.644,0.246),
+c("GO:0051641","cellular localization", 2.041,-4.558, 4.199, 5.418,-3.0191,0.705,0.283),
+c("GO:1901566","organonitrogen compound biosynthetic process",14.064, 5.459, 3.490, 6.256,-5.2269,0.755,0.391),
+c("GO:0044271","cellular nitrogen compound biosynthetic process",22.502, 5.802, 2.156, 6.460,-4.8962,0.760,0.456),
+c("GO:0044270","cellular nitrogen compound catabolic process", 1.045, 5.434,-2.777, 5.127,-3.4597,0.649,0.523),
+c("GO:1901361","organic cyclic compound catabolic process", 1.164, 3.271,-5.714, 5.174,-3.2668,0.718,0.640),
+c("GO:0006412","translation", 5.686, 4.553, 2.805, 5.863,-6.7235,0.656,0.661),
+c("GO:0042886","amide transport", 0.337,-5.115, 2.795, 4.636,-3.9431,0.718,0.689));
 
 revigo_data = revigo_data %>%
   as_tibble(.name_repair = ~revigo_names) %>%
@@ -2743,23 +2915,28 @@ revigo_data = revigo_data %>%
 
 plot_cancer_exclusive_process = revigo_data %>%
   mutate(description = str_replace(description, "nuclear-transcribed mRNA catabolic process, nonsense-mediated decay", 
-                     "nonsense-mediated decay")) %>% 
+                     "nonsense-mediated decay") %>%
+           str_replace(., "protein localization to endoplasmic reticulum", "protein localization to ER")) %>% 
   ggplot(aes(x = plot_x, y = plot_y, color = log10_p_value, size = plot_size), alpha = 0.6) +
   geom_point() +
   geom_text(data = . %>% 
-              filter(log10_p_value < -5), 
-            aes(label = str_wrap(description,5)), 
+              filter(log10_p_value < -5.3), 
+            aes(label = str_wrap(description,10) %>% 
+                  str_pad(width = 10, side = "left", pad = " ")), 
             size = 4,
             color = "black",
-            position = position_nudge(x = 4.3, y = 0)) + 
+            position = position_nudge(x = 3.7, y = -1.3)) + 
   scale_color_viridis() +
-  scale_x_continuous(expand = expand_scale(add = 5)) +
-  scale_y_continuous(expand = expand_scale(add = 1)) + 
+  scale_x_continuous(expand = expansion(add = 5)) +
+  scale_y_continuous(expand = expansion(add = 1)) + 
   scale_size_continuous(guide = "none") + 
-  labs(x = "Semantic Space X",
-       y = "Semantic Space Y",
-       color = "Log10(p value)")
-
+  labs(x = "",
+       y = "",
+       color = "Log10(p value)") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
 
 
 layout = "
@@ -2782,119 +2959,87 @@ plot_cancer_exclusive_num +
 
 ggsave("plots/fig_4.png", width = 10, height = 10, type = "cairo")
 
+#---------------------------------------------
+corr_rep_proj2 = corr_long_proj2 %>%
+  filter(id_1==id_2, array_id_1 != array_id_2, time_1 == time_2) %>%
+  mutate(fisher_z = 0.5*(log(1+coefficient) - log(1-coefficient))) %>%
+   summarize(sd = sd(coefficient),
+            mean_correlation_z = mean(fisher_z),
+            mean_correlation = (exp(2*mean_correlation_z) - 1) / (exp(2*mean_correlation_z) + 1),
+            n = n(), 
+            se = 1/sqrt(n-3),
+            label = "Replicate")
 
-#-----------------------------------------
-survival_protein_joined = protein_calls_long_by_pt %>%
-  left_join(survival_data, by = c("id")) %>%
-  filter(!is.na(study_id)) %>%
-  filter(is_protein_recognized) %>%
-  mutate(overall_flag = TRUE,
-        lnc_rna_flag = lnc_rna,
-        mitochondrial_flag = mitochondria,
-         ribosomal_flag = ribosomal,
-         normal_flag = seq_id %in% normal_proteins,
-         cancer_exclusive_flag = seq_id %in% cancer_only_proteins$seq_id,
-         castration_resistant_met_enriched_flag = seq_id %in% castration_resistant_met_enriched$seq_id,
-        ) %>%
-  group_by(stage, id, time_to_death, status, study) %>%
-  summarize_at(vars(ends_with("flag")), sum, na.rm = TRUE) %>%
-  ungroup()
+corr_same_proj2 = corr_long_proj2 %>%
+  filter(id_1==id_2, array_id_1 != array_id_2) %>%
+  mutate(fisher_z = 0.5*(log(1+coefficient) - log(1-coefficient))) %>%
+  summarize(sd = sd(coefficient),
+            mean_correlation_z = mean(fisher_z),
+            mean_correlation = (exp(2*mean_correlation_z) - 1) / (exp(2*mean_correlation_z) + 1),
+            n = n(), 
+            se = 1/sqrt(n-3),
+            label = "Same patient")
+
+plot_corr_vaccine = corr_long_proj2 %>%
+  filter(id_1 != id_2, time_1 == time_2) %>%
+  mutate(fisher_z = 0.5*(log(1+coefficient) - log(1-coefficient))) %>%
+  summarize(sd = sd(coefficient),
+            mean_correlation_z = mean(fisher_z),
+            mean_correlation = (exp(2*mean_correlation_z) - 1) / (exp(2*mean_correlation_z) + 1),
+            n = n(), 
+            se = 1/sqrt(n-3),
+            label = "Average Pair") %>%
+  bind_rows(corr_rep_proj2, corr_same_proj2) %>%
+  mutate(label = fct_reorder(label, mean_correlation)) %>%
+  ggplot(aes(x=label, y = mean_correlation)) +
+  geom_col(fill = "black") + 
+  geom_errorbar(aes(ymin = mean_correlation-sd, ymax = mean_correlation+sd), width = .5) +
+  labs(x = "",
+       y = "Correlation Coefficient") +
+   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+plot_increased_epitopes = cowplot::ggdraw() + cowplot::draw_image(magick::image_read("per_epitope_volcano.png") , 
+                                                                          scale = 1,
+                                                                          x = 0)
+
+plot_increased_proteins = increased_proteins %>%  
+  mutate(ribosomal_flag = case_when(
+    ribosomal == TRUE ~ "ribosomal", 
+    ribosomal == FALSE ~ "non-ribosomal",
+    is.na(ribosomal) ~ "non-ribosomal"
+  )) %>%  
+  ggplot(aes(x = vaccine, y = adt, color = ribosomal_flag)) +
+  geom_jitter(width = 0.2, height = 0.2, alpha = 0.7) +
+  geom_abline(slope = 1, lty = 2, color = "black") + 
+  scale_color_manual(values = c("grey", "#F8766D")) +
+  scale_y_continuous(labels = scales::label_number(accuracy = 1), breaks = scales::breaks_pretty(n = 3)) +
+  coord_cartesian(xlim = c(0,15), ylim = c(0,15)) + 
+  labs(x = "Number of PAP pts with increasing recognition",
+       y = "Number of ADT pts with increasing recognition",
+       color = "")
 
 
-fit_coxph = function(data) {
-  coxph(Surv(time_to_death, status)~count, data = data)
-}
-
-plot_forest = survival_protein_joined %>%
-  pivot_longer(ends_with("flag"), names_to = "predictor", values_to = "count") %>%
-  group_by(predictor) %>%
-  nest() %>%
-  mutate(cox_fit = map(data, fit_coxph),
-         tidied = map(cox_fit, tidy)) %>%
-  unnest(tidied) %>%
-  ungroup() %>%
-  mutate_at(vars(c("estimate", "conf.low", "conf.high")), exp) %>%
-  mutate(predictor = str_remove_all(predictor, "_flag") %>%
-           fct_inorder() %>%
-           fct_rev() %>%
-           fct_relabel(~str_replace_all(., "_", " ")) %>% 
-           fct_relabel(~str_to_title(.)) %>%
-           fct_relabel(~str_replace_all(.,"Lnc Rna", "lncRNA")) %>%
-           fct_relabel(~str_replace_all(.,"Cancer Exclusive", "Cancer-Exclusive")) %>%
-           fct_relabel(~str_replace(., "Castration Resistant Met Enriched", "mCRPC-Enriched"))) %>%
-  ggplot(aes(x=predictor, y=estimate)) +
-  geom_point(size = 2) +
-  geom_linerange(aes(ymin = conf.low, ymax = conf.high), size = 1) + 
-  geom_hline(aes(yintercept = 1), lty = 2) + 
-  coord_flip(ylim = c(.5, 1.5)) +
-  labs(x = "Predictor",
-       y = "Hazard Ratio")
-
-survival_cut_cancer_exclusive = protein_calls_long_by_pt %>%
-  left_join(survival_data, by = c("id")) %>%
-  filter(!is.na(study_id)) %>%
-  filter(seq_id %in% cancer_only_proteins$seq_id) %>% 
-  group_by(stage, id, time_to_death, status, study) %>%
-  summarize(number_recognized = sum(is_protein_recognized, na.rm = TRUE)) %>%
-  ungroup() %>% 
-  mutate(high_ab_response = number_recognized > 16)
-
-fit_survival_cancer_exclusive = survfit(Surv(time_to_death, status)~high_ab_response, 
-                                     data = survival_cut_cancer_exclusive)
-
-
-plot_kaplan_meier_cancer_exclusive = ggsurvplot(fit_survival_cancer_exclusive,
-           censor.shape = "+", 
-           xlab = "Days",
-           ylab = expression("Probability of survival"),
-           size = 1,
-           legend = "right",
-           palette = brewer.pal(3, "Set2"),
-           legend.title = str_wrap("Number of Cancer-Exclusive Proteins Recognized", width = 20),
-           legend.labs = c("Low", "High")) + 
-  guides(color = guide_legend(override.aes = list(shape = NA)))
-
-plot_kaplan_meier_cancer_exclusive = plot_kaplan_meier_cancer_exclusive$plot
-
-survival_cut_lnc_rna = protein_calls_long_by_pt %>%
-  left_join(survival_data, by = c("id")) %>%
-  filter(!is.na(study_id)) %>%
-  filter(lnc_rna) %>% 
-  group_by(stage, id, time_to_death, status, study) %>%
-  summarize(number_recognized = sum(is_protein_recognized, na.rm = TRUE)) %>%
-  ungroup() %>% 
-  mutate(high_ab_response = number_recognized > 18)
-
-fit_survival_lnc_rna = survfit(Surv(time_to_death, status)~high_ab_response, 
-                                     data = survival_cut_lnc_rna)
-
-plot_kaplan_meier_lnc_rna = ggsurvplot(fit_survival_lnc_rna,
-           censor.shape = "+", 
-           xlab = "Days",
-           ylab = expression("Probability of survival"),
-           size = 1,
-           legend = "right",
-           palette = brewer.pal(3, "Set2"),
-           legend.title = str_wrap("Number of lncRNAs Recognized", width = 20),
-           legend.labs = c("Low", "High")) + 
-  guides(color = guide_legend(override.aes = list(shape = NA)))
-
-plot_kaplan_meier_lnc_rna = plot_kaplan_meier_lnc_rna$plot
-
+plot_vaccine_go_component = cowplot::ggdraw() + cowplot::draw_image(magick::image_read("gorilla_output/vaccine_increased_component.png") , 
+                                                                          scale = 1,
+                                                                          x = 0)
 
 layout = "
-AB
-AC
+ABBCCC
+ABBCCC
+EEEEEE
+EEEEEE
+EEEEEE
 "
 
-plot_forest + 
-  plot_kaplan_meier_cancer_exclusive +
-  plot_kaplan_meier_lnc_rna +
+plot_corr_vaccine + 
+  wrap_elements(full = plot_increased_epitopes) +
+  wrap_elements(plot = plot_increased_proteins) +
+  wrap_elements(full = plot_vaccine_go_component) + 
   plot_layout(design = layout) +
   plot_annotation(tag_levels = "A")
 
-ggsave("plots/fig_5.png", width = 12, height = 8, type = "cairo")
 
+ggsave("plots/fig_5.png", width = 18, height = 15, type = "cairo")
 
 ```
 
@@ -3161,6 +3306,69 @@ protein_expression %>%
   select(gene_symbol) %>%
   as_vector %>%
   unname() %in% protein_calls_short %>% View()
+```
+
+
+
+```{r eval = FALSE}
+# load in all raw data
+
+run_0 = read_csv("Processed_aggregate_data.csv",
+                    col_types = cols(
+                        .default = col_double(),
+                        PROBE_DESIGN_ID = col_character(),
+                        CONTAINER = col_character(),
+                        DESIGN_NOTE = col_logical(),
+                        SELECTION_CRITERIA = col_logical(),
+                        SEQ_ID = col_character(),
+                        PROBE_SEQUENCE = col_character(),
+                        PROBE_CLASS = col_character(),
+                        PROBE_ID = col_character()
+                    )
+)
+
+run_1 = read_tsv("Processed_aggregate_data_1st_run.tab",
+                 col_types = cols(
+                        .default = col_double(),
+                        PROBE_DESIGN_ID = col_character(),
+                        CONTAINER = col_character(),
+                        DESIGN_NOTE = col_logical(),
+                        SELECTION_CRITERIA = col_logical(),
+                        SEQ_ID = col_character(),
+                        PROBE_SEQUENCE = col_character(),
+                        PROBE_CLASS = col_character(),
+                        PROBE_ID = col_character()
+                    )
+) %>% select(contains("dat"))
+
+run_2 = read_tsv("Processed_aggregate_data_run_2.txt",
+                 col_types = cols(
+                        .default = col_double(),
+                        PROBE_DESIGN_ID = col_character(),
+                        CONTAINER = col_character(),
+                        DESIGN_NOTE = col_logical(),
+                        SELECTION_CRITERIA = col_logical(),
+                        SEQ_ID = col_character(),
+                        PROBE_SEQUENCE = col_character(),
+                        PROBE_CLASS = col_character(),
+                        PROBE_ID = col_character()
+                    )
+) %>%
+  select(contains("dat"))
+
+raw_data_full = run_0 %>%
+  bind_cols(run_1) %>%
+  bind_cols(run_2) 
+
+
+PROBE_DESIGN_ID:Y
+
+raw_data_full %>%
+  select(any_of(missing_nmcspc_array_ids)) %>%
+  bind_cols(raw_data) %>%
+  select(PROBE_DESIGN_ID:Y, everything()) %>%
+  write_csv("raw_data_complete.csv")
+  
 ```
 
 ```{r eval = FALSE}
