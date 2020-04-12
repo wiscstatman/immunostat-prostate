@@ -2,25 +2,25 @@ library(tidyverse) # make sure you have the latest tidyverse !
 library(fdrtool)
 library(Rtsne)
 library(heatmap3)
+library(ggplot2)
 
 # raw_data_median <- read.table("ANOVA_median.csv", header = T, row.names = NULL, sep = ",")
+# median_double_log2 <- read.table("ANOVA_median_log2log2.csv", header = T, row.names = NULL, sep = ",")
 
 ####################################################################################### 
 #                           Some Common Variables and Functions                       #
 ####################################################################################### 
 
 # specified color scheme 
-pal <- c("firebrick1", "cornflowerblue",
-         "darkorange1", "navy",
-         "orchid1", "turquoise1")
-names(pal) <- c("mCRPC", "new_dx", 
-                "nmCRPC", "normal", 
-                "mCSPC", "nmCSPC")
+pal <- c("navy", "cornflowerblue", "turquoise1", "orchid1", "darkorange1", "firebrick1")
+names(pal) <- c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC")
+shp <- c(8, 15, 16, 3, 17, 18)
+names(shp) <- names(pal)
 
 # function to plot PCA loadings
-PCload.func <- function(cols, U, D, x, y, pca.vec, title){
+PCload.func <- function(cols, shapes, U, D, x, y, pca.vec, title){
   Z <- U %*% diag(D)
-  plot(Z[,x], Z[,y], pch=16, col = cols, main = title,
+  plot(Z[,x], Z[,y], col = cols, pch = shapes, main = title,
        xlab = paste0("PC",x," (", round(pca.vec[x]*100, 1) ,"% variance explained)"),
         ylab = paste0("PC",y," (", round(pca.vec[y]*100, 1) ,"% variance explained)") 
   )
@@ -77,6 +77,16 @@ array_id_key %>%
   summarize() %>%
   group_by(stage) %>%
   tally()
+
+# if you want to remove patients whose rep == 1
+sample_key = array_id_key %>%
+  group_by(id, stage) %>%
+  summarize(n = n()) %>%  # assign (id,stage) group counts to the variable "n"
+  ungroup() %>% 
+  filter(n >= 2) %>%
+  select(-n) # drop the column "n"
+array_id_key = array_id_key %>%
+  filter(id %in% sample_key$id)
 
 #-----------------------------------------------------------------------------------------------
 # Ensuring only distinct patients
@@ -302,9 +312,11 @@ table(raw_data_median$rank_variance[raw_data_median$rank_variance<=7])
 table(median_double_log2$rank_variance[median_double_log2$rank_variance<=7])
 
 # rearrange columns
-raw_data_median <- raw_data_median[, c(1:10, 154,155, 11:153)]
+raw_data_median <- raw_data_median[, c(1:10, (ncol(raw_data_median)-1):ncol(raw_data_median), 
+                                       11:(ncol(raw_data_median)-2))]
 colnames(raw_data_median)[1:15];  tail(colnames(raw_data_median)) # check
-median_double_log2 <- median_double_log2[, c(1:10, 154,155, 11:153)]
+median_double_log2 <- median_double_log2[, c(1:10, (ncol(raw_data_median)-1):ncol(raw_data_median), 
+                                             11:(ncol(raw_data_median)-2))]
 colnames(median_double_log2)[1:15];  tail(colnames(median_double_log2)) # check
 
 # write table
@@ -312,7 +324,8 @@ raw_data_median <- raw_data_median %>%
   add_column(p_values = one_way_anova_pval,
              BH_FDR = one_way_anova_BH,
              Storey_Qvalues = one_way_anova_qval)
-raw_data_median <- raw_data_median[, c(1:12, 156:158, 13:155)]
+raw_data_median <- raw_data_median[, c(1:12, (ncol(raw_data_median)-2):ncol(raw_data_median), 
+                                       13:(ncol(raw_data_median)-3))]
 colnames(raw_data_median)[1:20];  tail(colnames(raw_data_median));  raw_data_median[1:7,1:5] # check
 write.table(raw_data_median, file = "ANOVA_median.csv", sep = ",", row.names = F, col.names = T)
 
@@ -320,8 +333,10 @@ median_double_log2 <- median_double_log2 %>%
   add_column(p_values = anova_pval_double_log2,
              BH_FDR = anova_BH_double_log2,
              Storey_Qvalues = anova_qval_double_log2)
-median_double_log2 <- median_double_log2[, c(1:12, 156:158, 13:155)]
+median_double_log2 <- median_double_log2[, c(1:12, (ncol(raw_data_median)-2):ncol(raw_data_median), 
+                                             13:(ncol(raw_data_median)-3))]
 colnames(median_double_log2)[1:20];  tail(colnames(median_double_log2));  median_double_log2[1:7,1:5] # check
+write.table(median_double_log2, file = "ANOVA_median_log2log2.csv", sep = ",", row.names = F, col.names = T)
 
 # marginal variance filtering function
 marginal_var_filter.func <- function(pval_vector, topnum){
@@ -365,8 +380,20 @@ top_protein <- unique( raw_data_median$SEQ_ID[top$BH_filter <= 0.05]  )
 #######################################################################################
 
 cols = pal[ match(stage, names(pal)) ]
-anova_dat <- raw_data_median[ (raw_data_median$BH_FDR <= 0.05) & (raw_data_median$rank_variance <= 5) , 16:158]
-anova_dat <- median_double_log2[ (median_double_log2$BH_FDR <= 0.05) & (median_double_log2$rank_variance <= 1) , 16:158]
+shapes = shp[  match(stage, names(shp)) ]
+
+anova_dat <- raw_data_median[ (raw_data_median$BH_FDR <= 0.05) &
+                                (raw_data_median$rank_variance <= 5) ,
+                              16:ncol(raw_data_median)]
+# anova_dat <- raw_data_median[ (raw_data_median$BH_FDR <= 0.05) , 16:ncol(raw_data_median)]
+anova_dat <- median_double_log2[ (median_double_log2$BH_FDR <= 0.05) & 
+                                   (median_double_log2$rank_variance <= 1) , 
+                                 16:raw_data_median]
+
+# in case you want to remove a certain stage from visualization
+anova_dat <- anova_dat[, (stage != "normal")]
+cols = pal[ match(stage[stage != "normal"], names(pal)) ]
+shapes <- shp[ match(stage[stage != "normal"], names(shp)) ]
 
 #---------------------------------------------------------------------------------------
 # PCA
@@ -385,9 +412,9 @@ pca.cumvar <- cumsum(pca.var)
 # plot PCA
 par(mfrow = c(1,2), pty = "s", mar = c(2.2,2.3,1.5,0.45), mgp = c(1.4,0.4,0),
     cex.axis = 0.84, cex.lab = 0.84, cex.main = 0.84, tcl = -0.4)
-PCload.func(cols, U, D, 1, 2, pca.var, title = "PC2 vs PC1") # PC loadings (PC2 vs PC1)
-PCload.func(cols, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
-legend('topright', pch = 16, col = c("navy", "cornflowerblue", "turquoise1", "orchid1", "darkorange1", "firebrick1"),
+PCload.func(cols, shapes, U, D, 1, 2, pca.var, title = "PC2 vs PC1") # PC loadings (PC2 vs PC1)
+PCload.func(cols, shapes, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
+legend('bottomleft', pch = shp, col = pal,
       c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC") )
 dev.off()
 
@@ -397,16 +424,16 @@ dev.off()
 # how to specify parameter
 # refer: https://lvdmaaten.github.io/tsne/User_guide.pdf
 tsnedat <- unname(t(anova_dat)) # dim(X) = N samples by D dimensions 
-initdim <- 100 
-perplex <- 40 
+initdim <- 90 
+perplex <- 30 
 
-set.seed(10)
+set.seed(777)
 tsne_anova <- Rtsne(tsnedat, initial_dims = initdim, perplexity = perplex,
                   theta = 0, check_duplicates = F, max_iter = 100000L, eta = 50)
 
 # t-SNE plot
-plot(tsne_anova$Y, pch = 16, ylab = "", xlab = "", col = cols, main = "t-SNE plot")
-legend('bottomright', pch = 16, col = c("navy", "cornflowerblue", "turquoise1", "orchid1", "darkorange1", "firebrick1"),
+plot(tsne_anova$Y, ylab = "", xlab = "", col = cols, pch = shapes, main = "t-SNE plot")
+legend('bottomright', pch = shp, col = pal,
        c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC") )
 dev.off()
 
@@ -415,9 +442,9 @@ dev.off()
 
 # heatmap color scheme
 cls <- colorRampPalette(c("navy", "white","firebrick3"))(n = 1024)
-cls <- colorRampPalette(c("navy", "yellow","red"))(n = 256)
+cls <- colorRampPalette(c("navy", "yellow","red"))(n = 1024)
 
-heatmap_dat <- t(apply(anova_dat, 1, function(x){(x-mean(x))/sd(x)}))
+# heatmap_dat <- t(apply(anova_dat, 1, function(x){(x-mean(x))/sd(x)}))
 heatmap_dat <- sweep(anova_dat, 1, rowMeans(anova_dat), "-") # centering by row
 
 heatmap3(heatmap_dat, 
@@ -436,5 +463,74 @@ heatmap3(heatmap_dat,
          #                                 lwd = 5  )
 )
 
+#---------------------------------------------------------------------------------------
+# Boxplots of a few peptides
+
+boxplot_col <- unname( pal[ match(levels(stage), names(pal)) ] )
+
+boxplot_func <- function(mat, col = boxplot_col, draw){
+  par(mar = c(2, 4.5, 2.3, 1),cex = 0.84)
+  boxplot( as.numeric(mat[draw,]) ~ stage, 
+           col=col, horizontal=TRUE, las=1, xlab = NA, ylab = NA,
+           main= paste(boxplot_peptides[draw]) )
+  abline( h=2.5, col="grey" )
+  abline( h=4.5, col="grey" )
+  abline( h=6.5, col="grey" )
+}
+
+boxplot_peptides <- c(
+  "1152_HIST1H4L_8368;9",
+  "1241_C21orf33_8209;125",
+  "50_HERPUD1_9709;189",
+  "48_RPS6_6194;133",
+  "439_TAX1BP1_8887;493",
+  "1220_PKP3_11187;577"
+)
+
+boxplot_mat <- as.matrix(raw_data_median[match(boxplot_peptides, raw_data_median$PROBE_ID),16:ncol(raw_data_median)])  
+boxplot_func(mat = boxplot_mat, draw = 1)
+boxplot_func(mat = boxplot_mat, draw = 2)
+boxplot_func(mat = boxplot_mat, draw = 3)
+boxplot_func(mat = boxplot_mat, draw = 4)
+boxplot_func(mat = boxplot_mat, draw = 5)
+boxplot_func(mat = boxplot_mat, draw = 6)
 
 
+####################################################################################### 
+#                                 Tukey HSD Pairwise Comparison                       #
+#######################################################################################
+
+median_subset <- raw_data_median[ (raw_data_median$BH_FDR <= 0.05) , ]
+
+tukey_adjusted_pval <- matrix(NA, nrow = nrow(median_subset), ncol = choose(nlevels(stage),2))
+
+for (i in 1: nrow(median_subset)){
+  fit1 <- aov( as.numeric(median_subset[i, (ncol(median_subset)-n+1) : ncol(median_subset)]) ~ stage )
+  tukey_adjusted_pval[i,] <- unname(TukeyHSD(fit1)$stage[,'p adj'])
+}
+colnames(tukey_adjusted_pval) <- names(TukeyHSD(fit1)$stage[,'p adj'])
+row.names(tukey_adjusted_pval) <- median_subset$PROBE_ID
+
+tukey_cutoff <- 0.05
+
+# column (pairwise) summary
+apply(tukey_adjusted_pval,2, function(x){length(x[x <= tukey_cutoff])})
+
+# pairwise comparison pattern
+# 1: at most cutoff, 0: more than cutoff
+tukey_pairwise_pattern <- as.data.frame(sign( -1 * sign(tukey_adjusted_pval - tukey_cutoff) + 1 )) 
+
+# extract some funny pattern
+which(
+  tukey_pairwise_pattern$"new_dx-normal" == 1 &
+    tukey_pairwise_pattern$"nmCSPC-normal" == 1 &
+    tukey_pairwise_pattern$"nmCRPC-normal" == 1 &
+    tukey_pairwise_pattern$"mCRPC-normal"  == 1 &
+    tukey_pairwise_pattern$"nmCSPC-new_dx" == 0 &
+    tukey_pairwise_pattern$"nmCRPC-new_dx" == 0 &
+    tukey_pairwise_pattern$"mCRPC-new_dx"  == 0 &
+    tukey_pairwise_pattern$"nmCRPC-nmCSPC" == 0 &
+    tukey_pairwise_pattern$"mCRPC-nmCSPC"  == 0 &
+    tukey_pairwise_pattern$"mCRPC-nmCRPC"  == 0 &
+    median_subset$rank_variance <= 3
+  )
