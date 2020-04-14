@@ -2,16 +2,17 @@ library(tidyverse) # make sure you have the latest tidyverse !
 library(fdrtool)
 library(Rtsne)
 library(heatmap3)
-library(ggplot2)
+library(xlsx)
 
 # raw_data_median <- read.table("ANOVA_median.csv", header = T, row.names = NULL, sep = ",")
 # median_double_log2 <- read.table("ANOVA_median_log2log2.csv", header = T, row.names = NULL, sep = ",")
+load("remove_rep1.RData")
 
 ####################################################################################### 
 #                           Some Common Variables and Functions                       #
 ####################################################################################### 
 
-# specified color scheme 
+# specified color and shape scheme 
 pal <- c("navy", "cornflowerblue", "turquoise1", "orchid1", "darkorange1", "firebrick1")
 names(pal) <- c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC")
 shp <- c(8, 15, 16, 3, 17, 18)
@@ -225,6 +226,7 @@ stage_double_log2 <- sample_key$stage[stage_iii_double_log2]
 stage_double_log2 <- factor(stage_double_log2) # remove unused levels
 sum(as.numeric(stage_double_log2 == stage)) == nrow(sample_key)
 
+#----------------------------------------------------------------------------------------
 # initiate
 one_way_anova_pval <- rep(NA, nrow(raw_data_median))
 anova_pval_double_log2 <- rep(NA, nrow(median_double_log2))
@@ -237,17 +239,20 @@ for(i in 1:nrow(raw_data_median)){
     as.numeric(raw_data_median[i, (median_ncol-n+1) : median_ncol]) ~ stage ) ))["Pr(>F)1"] )
   print(i)
 }
+names(one_way_anova_pval) <- raw_data_median$PROBE_ID
 
 for(i in 1:nrow(median_double_log2)){
   anova_pval_double_log2[i] <- unname( unlist(summary( aov( 
     as.numeric(median_double_log2[i, (median_ncol-n+1) : median_ncol]) ~ stage_double_log2 ) ))["Pr(>F)1"] )
   print(i)
 }
+names(anova_pval_double_log2) <- raw_data_median$PROBE_ID
 
 # plot p-values histogram
 hist(one_way_anova_pval, breaks = 70, freq = F, xlab = "one-way ANOVA p-values", main = "p-values distribution \nfor peptides")
 hist(anova_pval_double_log2, breaks = 70, freq = F, xlab = "one-way ANOVA p-values", main = "p-values distribution \nfor peptides")
 
+#----------------------------------------------------------------------------------------
 one_way_anova_BH <- p.adjust(one_way_anova_pval, method = "BH")
 one_way_anova_qval <- fdrtool(one_way_anova_pval, statistic = "pvalue", verbose = F, plot  = F)$qval
 qval_eta0 <- unname(fdrtool(one_way_anova_pval, statistic = "pvalue", verbose = F, plot  = F)$param[,"eta0"])
@@ -262,6 +267,7 @@ count.func(one_way_anova_qval, seq(0.01, 0.1, by = 0.01))
 count.func(anova_BH_double_log2, seq(0.01, 0.1, by = 0.01))
 count.func(anova_qval_double_log2, seq(0.01, 0.1, by = 0.01))
 
+#----------------------------------------------------------------------------------------
 # plot histogram with proportion of non-null peptides
 all_peptide_hist <- hist(one_way_anova_pval, breaks = 70, freq = F, 
                          xlab = "one-way ANOVA p-values", main = "p-values distribution for peptides")
@@ -311,6 +317,7 @@ median_double_log2$rank_variance = floor(median_double_log2$rank_variance)
 table(raw_data_median$rank_variance[raw_data_median$rank_variance<=7])
 table(median_double_log2$rank_variance[median_double_log2$rank_variance<=7])
 
+#----------------------------------------------------------------------------------------
 # rearrange columns
 raw_data_median <- raw_data_median[, c(1:10, (ncol(raw_data_median)-1):ncol(raw_data_median), 
                                        11:(ncol(raw_data_median)-2))]
@@ -338,9 +345,11 @@ median_double_log2 <- median_double_log2[, c(1:12, (ncol(raw_data_median)-2):nco
 colnames(median_double_log2)[1:20];  tail(colnames(median_double_log2));  median_double_log2[1:7,1:5] # check
 write.table(median_double_log2, file = "ANOVA_median_log2log2.csv", sep = ",", row.names = F, col.names = T)
 
+#----------------------------------------------------------------------------------------
 # marginal variance filtering function
 marginal_var_filter.func <- function(pval_vector, topnum){
-  pval_filter = pval_vector[raw_data_median$rank_variance <= topnum]
+  # pval_filter = pval_vector[raw_data_median$rank_variance <= topnum]
+  pval_filter = pval_vector[rank_variance <= topnum]
   BH_filter = p.adjust(pval_filter, method = "BH")
   qval_filter = fdrtool(pval_filter, statistic = "pvalue", verbose = F, plot  = F)$qval
   qval_eta0_filter = unname(fdrtool(pval_filter, statistic = "pvalue", verbose = F, plot  = F)$param[,"eta0"])
@@ -375,6 +384,8 @@ text(x=0.65,y=4, labels = paste( "estimated proportion of \nnon-null peptides ="
 
 top_protein <- unique( raw_data_median$SEQ_ID[top$BH_filter <= 0.05]  )
 
+
+
 ####################################################################################### 
 #                                        ANOVA Visualization                          #
 #######################################################################################
@@ -382,18 +393,19 @@ top_protein <- unique( raw_data_median$SEQ_ID[top$BH_filter <= 0.05]  )
 cols = pal[ match(stage, names(pal)) ]
 shapes = shp[  match(stage, names(shp)) ]
 
-anova_dat <- raw_data_median[ (raw_data_median$BH_FDR <= 0.05) &
-                                (raw_data_median$rank_variance <= 5) ,
-                              16:ncol(raw_data_median)]
-# anova_dat <- raw_data_median[ (raw_data_median$BH_FDR <= 0.05) , 16:ncol(raw_data_median)]
-anova_dat <- median_double_log2[ (median_double_log2$BH_FDR <= 0.05) & 
-                                   (median_double_log2$rank_variance <= 1) , 
-                                 16:raw_data_median]
+# anova_dat <- raw_data_median[ top$BH_filter <= 0.05 ,  16:ncol(raw_data_median)]
+anova_dat <- as.matrix(raw_data_median[ (raw_data_median$BH_FDR <= 0.05) , 16:ncol(raw_data_median)])
+row.names(anova_dat) <- raw_data_median$PROBE_ID[ (raw_data_median$BH_FDR <= 0.05) ]
+
+anova_dat <- sweep(anova_dat, 1, rowMeans(anova_dat), "-") # centering by row
+
+cols = pal[ match(stage, names(pal)) ]
+shapes = shp[  match(stage, names(shp)) ]
 
 # in case you want to remove a certain stage from visualization
-anova_dat <- anova_dat[, (stage != "normal")]
-cols = pal[ match(stage[stage != "normal"], names(pal)) ]
-shapes <- shp[ match(stage[stage != "normal"], names(shp)) ]
+# anova_dat <- anova_dat[, (stage != "normal")]
+# cols = pal[ match(stage[stage != "normal"], names(pal)) ]
+# shapes <- shp[ match(stage[stage != "normal"], names(shp)) ]
 
 #---------------------------------------------------------------------------------------
 # PCA
@@ -427,13 +439,13 @@ tsnedat <- unname(t(anova_dat)) # dim(X) = N samples by D dimensions
 initdim <- 90 
 perplex <- 30 
 
-set.seed(777)
+set.seed(10)
 tsne_anova <- Rtsne(tsnedat, initial_dims = initdim, perplexity = perplex,
-                  theta = 0, check_duplicates = F, max_iter = 100000L, eta = 50)
+                  theta = 0, check_duplicates = F, max_iter = 50000L, eta = 50)
 
 # t-SNE plot
 plot(tsne_anova$Y, ylab = "", xlab = "", col = cols, pch = shapes, main = "t-SNE plot")
-legend('bottomright', pch = shp, col = pal,
+legend('topright', pch = shp, col = pal,
        c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC") )
 dev.off()
 
@@ -441,11 +453,66 @@ dev.off()
 # Heatmap
 
 # heatmap color scheme
-cls <- colorRampPalette(c("navy", "white","firebrick3"))(n = 1024)
-cls <- colorRampPalette(c("navy", "yellow","red"))(n = 1024)
+# cls <- colorRampPalette(c("navy", "white","firebrick3"))(n = 2048)
+cls <- colorRampPalette(c("navy", "white", "firebrick1", "firebrick3"))(n = 1024)
 
 # heatmap_dat <- t(apply(anova_dat, 1, function(x){(x-mean(x))/sd(x)}))
-heatmap_dat <- sweep(anova_dat, 1, rowMeans(anova_dat), "-") # centering by row
+
+heatmap3(anova_dat, 
+         col = cls, # specify colors 
+         ColSideColors = cols, # specify patient color code
+         labCol = stage, # specify patient
+         ColSideLabs = "stages", 
+         labRow = "",
+         xlab = "Patients",
+         # legendfun=function() showLegend(col = c("navy", "cornflowerblue", "turquoise1", "orchid1", 
+         #                                         "darkorange1", "firebrick1"),
+         #                                 legend = c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC"),
+         #                                 cex = 1.2,
+         #                                 lwd = 5  )
+)
+
+#---------------------------------------------------------------------------------------
+# should we also exclude some rows and/or columns with huge outliers?
+
+
+anova_dat <- raw_data_median[ (raw_data_median$BH_FDR <= 0.05) , 16:ncol(raw_data_median)]
+
+# get 5-num summary
+fivenum_summary <- t( apply( anova_dat, 1, function(x){unname(summary(as.numeric(x)))} ) )
+colnames(fivenum_summary) <- c("min", "first_q", "median", "mean", "third_q", "max")
+row.names(fivenum_summary) <- raw_data_median$PROBE_ID[(raw_data_median$BH_FDR <= 0.05)]
+
+# get 95th percentile and 00th percentile
+fivenum_summary <- as.data.frame(fivenum_summary)
+fivenum_summary$percentile95 <- apply(anova_dat, 1, function(x){quantile(x, probs = .95, names = F)})
+fivenum_summary$percentile99 <- apply(anova_dat, 1, function(x){quantile(x, probs = .99, names = F)})
+
+hist(fivenum_summary$max, main = "Histogram of maximum log2(fluorescence) for peptides at BH FDR 5%")
+length(fivenum_summary$max[fivenum_summary$max >= 13])
+hist(fivenum_summary$percentile95, main = "Histogram of 95th percentile log2(fluorescence) for peptides at BH FDR 5%")
+hist(fivenum_summary$percentile99, main = "Histogram of 99th percentile log2(fluorescence) for peptides at BH FDR 5%")
+
+# hist(fivenum_summary$third_q, main = "Histogram of 3rd quartile log2(fluorescence) for peptides at BH FDR 5%")
+# hist(fivenum_summary$min, main = "Histogram of minimum log2(fluorescence) for peptides at BH FDR 5%")
+# hist(fivenum_summary$first_q, main = "Histogram of 1st quartile log2(fluorescence) for peptides at BH FDR 5%")
+
+fivenum_summary %>% 
+  filter((max - percentile99) <=  (third_q - first_q)) %>%
+  filter(max <= 14) %>%
+  tally()
+
+# now plot heatmap
+heatmap_dat <- anova_dat[
+  (fivenum_summary$max <= 13)
+  & ((fivenum_summary$max - fivenum_summary$percentile99) <=
+     (fivenum_summary$third_q - fivenum_summary$first_q))
+  , 
+  # (stage != "normal") & (stage != "nmCRPC")
+] 
+heatmap_dat <- sweep(heatmap_dat, 1, rowMeans(heatmap_dat), "-") # centering by row
+
+cls <- colorRampPalette(c("navy", "blue", "white", "orchid", "firebrick3"))(n=1024)
 
 heatmap3(heatmap_dat, 
          col = cls, # specify colors 
@@ -462,39 +529,6 @@ heatmap3(heatmap_dat,
          #                                 cex = 1.2,
          #                                 lwd = 5  )
 )
-
-#---------------------------------------------------------------------------------------
-# Boxplots of a few peptides
-
-boxplot_col <- unname( pal[ match(levels(stage), names(pal)) ] )
-
-boxplot_func <- function(mat, col = boxplot_col, draw){
-  par(mar = c(2, 4.5, 2.3, 1),cex = 0.84)
-  boxplot( as.numeric(mat[draw,]) ~ stage, 
-           col=col, horizontal=TRUE, las=1, xlab = NA, ylab = NA,
-           main= paste(boxplot_peptides[draw]) )
-  abline( h=2.5, col="grey" )
-  abline( h=4.5, col="grey" )
-  abline( h=6.5, col="grey" )
-}
-
-boxplot_peptides <- c(
-  "1152_HIST1H4L_8368;9",
-  "1241_C21orf33_8209;125",
-  "50_HERPUD1_9709;189",
-  "48_RPS6_6194;133",
-  "439_TAX1BP1_8887;493",
-  "1220_PKP3_11187;577"
-)
-
-boxplot_mat <- as.matrix(raw_data_median[match(boxplot_peptides, raw_data_median$PROBE_ID),16:ncol(raw_data_median)])  
-boxplot_func(mat = boxplot_mat, draw = 1)
-boxplot_func(mat = boxplot_mat, draw = 2)
-boxplot_func(mat = boxplot_mat, draw = 3)
-boxplot_func(mat = boxplot_mat, draw = 4)
-boxplot_func(mat = boxplot_mat, draw = 5)
-boxplot_func(mat = boxplot_mat, draw = 6)
-
 
 ####################################################################################### 
 #                                 Tukey HSD Pairwise Comparison                       #
@@ -534,3 +568,136 @@ which(
     tukey_pairwise_pattern$"mCRPC-nmCRPC"  == 0 &
     median_subset$rank_variance <= 3
   )
+
+#----------------------------------------------------------------------------------------
+# write signif peptides and signif proteins into multiple worksheets of an Excel file
+
+wb = createWorkbook()
+
+# All_Peptides sheet
+sheet = createSheet(wb, "All_Peptides")
+
+# all peptides
+all_peptides_df <- as.data.frame( bind_cols(
+  select(raw_data, -contains("dat"))[one_way_anova_BH <= 0.05,],
+  rank_variance = rank_variance[one_way_anova_BH <= 0.05],
+  p_values = one_way_anova_pval[one_way_anova_BH <= 0.05],
+  BH_FDR = one_way_anova_BH[one_way_anova_BH <= 0.05],
+  q_values = one_way_anova_qval[one_way_anova_BH <= 0.05]
+) )
+head(all_peptides_df) # check
+addDataFrame(all_peptides_df, sheet=sheet, row.names=FALSE)
+
+all_peptides_unique_protein_df <- data.frame(
+  unique_protein = unique(all_peptides_df$SEQ_ID)
+)
+addDataFrame(all_peptides_unique_protein_df, sheet=sheet, startColumn = ncol(all_peptides_df) + 2, row.names=FALSE)
+
+
+# Tukey HSD sheet
+
+sheet = createSheet(wb, "Tukey_HSD")
+addDataFrame(as.data.frame(tukey_adjusted_pval), sheet=sheet)
+
+
+# Top_5 Sheet
+sheet = createSheet(wb, "Top_5")
+
+# marginal filtering top 5 
+topnum <- 5
+top <- marginal_var_filter.func(one_way_anova_pval, topnum)
+top5_df <- as.data.frame( bind_cols(
+  select(raw_data, -contains("dat"))[rank_variance <= topnum,][ top$BH_filter <= 0.05 ,],
+  rank_variance = rank_variance[rank_variance <= topnum][ top$BH_filter <= 0.05],
+  p_values = top$pval_filter[ top$BH_filter <= 0.05],
+  BH_FDR = top$BH_filter[ top$BH_filter <= 0.05],
+  q_values = top$qval_filter[ top$BH_filter <= 0.05]
+) )
+head(top5_df) # check
+addDataFrame(top5_df, sheet=sheet, row.names=FALSE)
+
+top5_unique_protein_df <- data.frame(
+  unique_protein = unique(top5_df$SEQ_ID)
+)
+addDataFrame(top5_unique_protein_df, sheet=sheet, startColumn = ncol(top5_df) + 2, row.names=FALSE)
+
+
+# Top_3 Sheet
+sheet = createSheet(wb, "Top_3")
+
+# marginal filtering top 3 
+topnum <- 3
+top <- marginal_var_filter.func(one_way_anova_pval, topnum)
+top3_df <- as.data.frame( bind_cols(
+  select(raw_data, -contains("dat"))[rank_variance <= topnum,][ top$BH_filter <= 0.05 ,],
+  rank_variance = rank_variance[rank_variance <= topnum][ top$BH_filter <= 0.05],
+  p_values = top$pval_filter[ top$BH_filter <= 0.05],
+  BH_FDR = top$BH_filter[ top$BH_filter <= 0.05],
+  q_values = top$qval_filter[ top$BH_filter <= 0.05]
+) )
+head(top3_df) # check
+addDataFrame(top3_df, sheet=sheet, row.names=FALSE)
+
+top3_unique_protein_df <- data.frame(
+  unique_protein = unique(top3_df$SEQ_ID)
+)
+addDataFrame(top3_unique_protein_df, sheet=sheet, startColumn = ncol(top3_df) + 2, row.names=FALSE)
+
+
+# Top_1 Sheet
+sheet = createSheet(wb, "Top_1")
+
+# marginal filtering top 3 
+topnum <- 1
+top <- marginal_var_filter.func(one_way_anova_pval, topnum)
+top1_df <- as.data.frame( bind_cols(
+  select(raw_data, -contains("dat"))[rank_variance <= topnum,][ top$BH_filter <= 0.05 ,],
+  rank_variance = rank_variance[rank_variance <= topnum][ top$BH_filter <= 0.05],
+  p_values = top$pval_filter[ top$BH_filter <= 0.05],
+  BH_FDR = top$BH_filter[ top$BH_filter <= 0.05],
+  q_values = top$qval_filter[ top$BH_filter <= 0.05]
+) )
+head(top1_df) # check
+addDataFrame(top1_df, sheet=sheet, row.names=FALSE)
+
+top1_unique_protein_df <- data.frame(
+  unique_protein = unique(top1_df$SEQ_ID)
+)
+addDataFrame(top1_unique_protein_df, sheet=sheet, startColumn = ncol(top1_df) + 2, row.names=FALSE)
+
+
+saveWorkbook(wb, "BH_FDR_5prct.xlsx")
+
+#---------------------------------------------------------------------------------------
+# Boxplots of a few peptides
+
+boxplot_col <- unname( pal[ match(levels(stage), names(pal)) ] )
+
+boxplot_func <- function(mat, col = boxplot_col, draw){
+  par(mar = c(2, 4.5, 2.3, 1),cex = 0.84)
+  boxplot( as.numeric(mat[draw,]) ~ stage, 
+           col=col, horizontal=TRUE, las=1, xlab = NA, ylab = NA,
+           main= paste(boxplot_peptides[draw]) )
+  abline( h=2.5, col="grey" )
+  abline( h=4.5, col="grey" )
+  abline( h=6.5, col="grey" )
+}
+
+boxplot_peptides <- c(
+  "1152_HIST1H4L_8368;9",
+  "1241_C21orf33_8209;125",
+  "50_HERPUD1_9709;189",
+  "48_RPS6_6194;133",
+  "439_TAX1BP1_8887;493",
+  "1220_PKP3_11187;577"
+)
+
+boxplot_mat <- as.matrix(raw_data_median[match(boxplot_peptides, raw_data_median$PROBE_ID),16:ncol(raw_data_median)])  
+boxplot_func(mat = boxplot_mat, draw = 1)
+boxplot_func(mat = boxplot_mat, draw = 2)
+boxplot_func(mat = boxplot_mat, draw = 3)
+boxplot_func(mat = boxplot_mat, draw = 4)
+boxplot_func(mat = boxplot_mat, draw = 5)
+boxplot_func(mat = boxplot_mat, draw = 6)
+
+
