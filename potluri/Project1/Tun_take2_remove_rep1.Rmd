@@ -215,7 +215,7 @@ kable( count.func(one_way_anova_BH, seq(0.01, 0.1, by = 0.01)),
 
 # Marginal Variance Filtering 
 
-Next, for every protein, we would like to filter the top few peptides with the largest marginal variance of $\log_2$ fluorescence among all patients. 
+Next, we aim to identify proteins by first filtering for potentially "strong" peptides in terms of huge marginal variance of peptide fluorescence. Specifically, for every protein, we would like to filter the top few peptides with the largest marginal variance of $\log_2$ fluorescence before we apply FDR control. 
 
 ```{r}
 # marginal variance filtering function
@@ -365,11 +365,22 @@ kable( count.func(top$qval_filter, seq(0.01, 0.1, by = 0.01)),
   row_spec(1, hline_after = T)
 ```
 
+
+
 # Visualization of One-Way ANOVA
 
 We have identified 4538 peptides at 5\% Benjamini-Hochberg(BH) false discovery rate (FDR). We would like to obtain some graphical representations to illustrate how the $\log_2$ fluorescence levels differ across different cancer stages for these 4538 peptides.  
 
-For each peptide, we remove the grand mean (row mean) of the $\log_2$ fluorescence levels for all patients, before applying the following visualization techniques.  
+For each peptide, we remove the grand mean (row mean) of the $\log_2$ fluorescence levels for all patients, before applying the following visualization techniques. Based on our one-way-ANOVA model assumption, if there is no cancer-stage effect, we expect these residual $\log_2$ fluorescence to be random noises. Any observed (clustering) patterns among these residual data points reveal the effects of various stages of prostate cancer.  
+
+For purpose of uniformity, we also use the same color scheme to distinguish the different stages of cancer patients (notice how the spectrum of colors changes with severity of the cancer stages):  
+
+* navy for healthy subjects
+* cornflower_blue for ``new_dx`` newly diagnosed patients
+* turquoise for ``nmCSPC`` patients
+* light pink for ``mCSPC`` patients -- none of these patients have technical replicates and are excluded from this analysis
+* dark orange for ``nmCSPC`` patients
+* dark red for ``mCSPC`` patients 
 
 ```{r}
 anova_dat_demean <- sweep(anova_dat, 1, rowMeans(anova_dat), "-") # centering by row
@@ -399,7 +410,7 @@ pca.cumvar <- cumsum(pca.var)
 par(mfrow = c(1,2), pty = "s", mar = c(2.2,2.3,1.5,0.45), mgp = c(1.4,0.4,0),
     cex.axis = 0.84, cex.lab = 0.84, cex.main = 0.84, tcl = -0.4)
 PCload.func(cols, shapes, U, D, 1, 2, pca.var, title = "PC2 vs PC1") # PC loadings (PC2 vs PC1)
-legend('topright', pch = shp, col = pal, cex = 0.6,
+legend('topright', pch = shp, col = pal, cex = 0.5,
       c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC") )
 PCload.func(cols, shapes, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
 ```
@@ -461,7 +472,7 @@ Again, we observe similar patterns that nmCSPC (colored turquoise) and new_dx (c
 
 # Tukey HSD (Honest Significant Difference)
 
-The one-way ANOVA is helpful in revealing peptides that exhibit significant difference in the group means of fluorescence levels among different groups of patients. We may be interested to find out which group or groups of patients that actually contribute to the significant difference in antibody responses.  
+The one-way ANOVA is helpful in revealing peptides that exhibit significant difference in the group means of fluorescence levels among patients at different stages of cancer. We may be interested to find out which group or groups of patients that actually contribute to the significant difference in antibody responses.  
 
 For the 4538 peptides at 5\% BH FDR, we proceed to perform the Tukey HSD analysis. Basically, it is a pairwise t-test (with standard error obtained from the previous one-way ANOVA and degrees of freedom adjusted for proper family-wise error rate) for all the possible contrasts:
 
