@@ -147,7 +147,8 @@ sample_key = array_id_key %>%
   ungroup()
 
 # extract stages of patients
-stage <- factor(sample_key$stage)
+# order levels of stages, matter for Tukey HSD
+stage <- factor(sample_key$stage, levels = c("normal","new_dx","nmCSPC","nmCRPC","mCRPC")) 
 
 ggplot(data=distinct_patients_with_reps, aes(x=stage, y=n)) + 
   geom_bar(stat="identity", width=0.5 , fill="steelblue") + 
@@ -160,9 +161,12 @@ Next, we take $\log_2$ transformation of the fluorescence intensity and compute 
 ```{r}
 # we load pre-saved results:
 # one-way anova p-values 
-# Tukey-HSD adjusted p-values for the 10 contrasts of the 4538 peptides at 5% BH FDR
 # (marginal) variance ranking of peptides within each protein
-# anova_dat: log2 fluorescence level for the 4538 peptides at 5% BH FDR 
+# anova_dat: log2 fluorescence level for the 4538 peptides at 5% BH FDR
+# anova_mse: the MSE that corresponds to anova_dat
+# Tukey-HSD adjusted p-values for the 10 contrasts of the 4538 peptides at 5% BH FDR
+# Tukey-HSD difference estimate
+# Tukey contrasts confidence interval
 
 load("remove_rep1.RData")
 ```
@@ -332,7 +336,7 @@ Again, we observe similar patterns that nmCSPC (colored turquoise) and new_dx (c
 
 The one-way ANOVA is helpful in revealing peptides that exhibit significant difference in the group means of $\log_2$ fluorescence levels among patients at different stages of cancer. We may be interested to find out which group or groups of patients that actually contribute to the significant difference in antibody responses.  
 
-For the 4538 peptides at 5\% BH FDR, we proceed to perform the Tukey HSD analysis. Basically, it is a pairwise t-test (with standard error obtained from the previous one-way ANOVA and degrees of freedom adjusted for proper family-wise error rate) for all the possible contrasts (pairwise comparison of 2 groups of patients):
+For the 4538 peptides at 5\% BH FDR, we proceed to perform the Tukey HSD analysis. Basically, it is very similar to a pairwise t-test (except that it corrects for family-wise error rate) for every possible contrast (pairwise comparison between 2 groups of patients):
 
 ```{r}
 colnames(tukey_adjusted_pval)
@@ -342,6 +346,16 @@ tukey_cutoff <- 0.05
 # 1: at most cutoff, 0: more than cutoff
 tukey_pairwise_pattern <- as.data.frame(sign( -1 * sign(tukey_adjusted_pval - tukey_cutoff) + 1 )) 
 
+# 1: positive difference; 0: exactly same; -1: negative difference
+tukey_pairwise_diff <- as.data.frame(sign( tukey_effect_estimate ) ) 
+
+# element-wise multiplication: 1: both significant and positive
+significant_positive <- tukey_pairwise_pattern * tukey_pairwise_diff
+
+# round to 4 decimal points
+tukey_effect_estimate <- round(tukey_effect_estimate, 4)
+tukey_adjusted_pval <- round(tukey_adjusted_pval, 4)
+
 # boxplots specs
 boxplot_col <- unname( pal[ match(levels(stage), names(pal)) ] )
 boxplot_func <- function(mat, col = boxplot_col, draw){
@@ -349,9 +363,9 @@ boxplot_func <- function(mat, col = boxplot_col, draw){
   boxplot( as.numeric(mat[draw,]) ~ stage, 
            col=col, horizontal=TRUE, las=1, xlab = NA, ylab = NA,
            main= paste(row.names(boxplot_mat)[draw]) )
-  abline( h=2.5, col="grey" )
-  abline( h=4.5, col="grey" )
-  abline( h=6.5, col="grey" )
+  abline( h=2.5, col="gray" )
+  abline( h=4.5, col="gray" )
+  abline( h=6.5, col="gray" )
 }
 ```
 
@@ -376,19 +390,104 @@ Among the 4538 peptides at 5\% BH FDR, we plot the number of peptides that are f
 ```{r, fig.height = 3.8}
 peptide_counts_df <- data.frame(
   contrasts = names(apply(tukey_adjusted_pval,2, function(x){length(x[x <= tukey_cutoff])})),
-  peptide_counts = unname( apply(tukey_adjusted_pval,2, function(x){length(x[x <= tukey_cutoff])}) ) 
+  Significant_peptide_counts = unname( apply(tukey_adjusted_pval,2, function(x){length(x[x <= tukey_cutoff])}) ) 
   ) 
-ggplot(data=peptide_counts_df, aes(x=contrasts, y=peptide_counts)) + 
+ggplot(data=peptide_counts_df, aes(x=contrasts, y=Significant_peptide_counts)) + 
   geom_bar(stat="identity", width=0.5 , fill="steelblue") + 
   coord_flip() +
-  geom_text(aes(label=peptide_counts), hjust=1.1, color = "white", size=4) +
+  geom_text(aes(label=Significant_peptide_counts), hjust=1.1, color = "white", size=4) +
   theme_minimal() 
 ```
 
-We could also plot the boxplots of a few peptides deemed significant under some interesting contrasts. The x-axis of the boxplots refers to the $\log_2$ median fluorescence level of the patients. For example, we want to find peptides that are significantly different between healthy subjects and cancer patients (but not siginificant among the different stages of patients).
+Note that these are peptides that are identified to be significantly different between the pairwise contrasts comparison, but these pairwise differences could be either positive or negative. In general, we are more interested in the development of new/heightened antibody responses (in response to more severe form of cancer) rather than the ones that went away. We could order the level of cancer stages according to their severity (recall that ``mCS`` patients do not have technical replicates and are excluded in this analysis):  
 
-```{r, echo = T, fig.height = 2.8}
-ind <- which(
+``normal``, ``new_dx``, ``nmCS``, ``nmCR``, ``mCR``,  
+
+and focus only on significant contrasts that are also positive in value, which indicates increased antibody responses in more severe form of prostate cancer. Now, we plot the number of peptides that have positive significant contrasts:
+
+```{r, fig.height = 3.8}
+positive_peptide_counts_df <- data.frame(
+  contrasts = names(apply(significant_positive,2, function(x){length(x[x == 1])})),
+  Positive_significant_peptide_counts = unname( apply(significant_positive,2, function(x){length(x[x == 1])}) ) 
+  ) 
+ggplot(data=positive_peptide_counts_df, aes(x=contrasts, y=Positive_significant_peptide_counts)) + 
+  geom_bar(stat="identity", width=0.5 , fill="steelblue") + 
+  coord_flip() +
+  geom_text(aes(label=Positive_significant_peptide_counts), hjust = -0.05, color = "black", size=2) +
+  theme_minimal() + 
+  theme(axis.text=element_text(size=6), axis.title=element_text(size = 6))
+```
+
+We could then investigate peptides deemed significant under some interesting (positive) contrasts. We will focus on two of them:  
+
+* ``mCR`` patients vs the others  
+* ``normal`` subjects vs cancer patients  
+
+## ``mCRPC`` vs the other stages
+
+For instance, we are interested in peptides that exhibit **significantly higher** $\log_2$ fluorescence level in ``mCR`` patients compared to the rest of the patients. 
+
+```{r, echo = T}
+mCR_ind <- which(
+  significant_positive$`mCRPC-normal` == 1 &
+    significant_positive$`mCRPC-new_dx`== 1 &
+    significant_positive$`mCRPC-nmCSPC` == 1 &
+    significant_positive$`mCRPC-nmCRPC` == 1
+)
+```
+
+We tabulate all these peptides.  
+
+```{r}
+mCR_df <- data.frame(
+  Peptide_ID = row.names(anova_dat)[mCR_ind],
+  BH_FDR = unname(round( one_way_anova_BH[one_way_anova_BH <= 0.05][mCR_ind], 4 )),
+  mCRPC_normal_diff = unname(tukey_effect_estimate[,'mCRPC-normal'][mCR_ind]),
+  mCRPC_new_dx_diff = unname(tukey_effect_estimate[,'mCRPC-new_dx'][mCR_ind]),
+  mCRPC_nmCSPC_diff = unname(tukey_effect_estimate[,'mCRPC-nmCSPC'][mCR_ind]),
+  mCRPC_nmCRPC_diff = unname(tukey_effect_estimate[,'mCRPC-nmCRPC'][mCR_ind])
+)
+mCR_df <- mCR_df[order(mCR_df$BH_FDR),]
+
+kable(mCR_df, format = "latex", row.names= F, col.names = NA, booktabs = T )%>%
+  kable_styling(latex_options = c("scale_down", "hold_position"))
+```
+
+In addition, we also plot the boxplots of the fluorescence levels of the different groups of patients for some of these peptides. The x-axis of the boxplots refers to the $\log_2$ median fluorescence level of the patients. 
+
+```{r, fig.height = 2.7}
+boxplot_mat <- anova_dat[match(mCR_df$Peptide_ID[c(1,2,4)], row.names(anova_dat)),]
+for (i in 1:nrow(boxplot_mat)){
+  boxplot_func(mat = boxplot_mat, draw = i)
+}
+```
+
+As an examnple, we also plot an error-bar figure for the contrasts of one of the significant peptides. 
+
+```{r}
+error_bar_ind <- match(mCR_df$Peptide_ID[1], row.names(anova_dat))
+error_bar_df <- data.frame(
+  contrasts = colnames(tukey_effect_estimate),
+  difference = unname(tukey_effect_estimate[error_bar_ind,]),
+  lower_CI = unname(tukey_CI_lower[error_bar_ind,]),
+  upper_CI = unname(tukey_CI_upper[error_bar_ind,])
+)
+
+ggplot(error_bar_df, aes(x = contrasts, y = difference)) + 
+  geom_point() +
+  geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI), width=.2, position=position_dodge(0.05)) +
+  coord_flip() +
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  labs(title = mCR_df$Peptide_ID[1]) + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Healthy subjects vs cancer patients
+
+For example, we could find peptides that are significantly different (could be higher or lower antibody responses) between healthy subjects and cancer patients (but not siginificant among the different stages of patients).
+
+```{r, echo = T}
+row.names(tukey_pairwise_pattern)[ which(
     tukey_pairwise_pattern$"new_dx-normal" == 1 &
     tukey_pairwise_pattern$"nmCSPC-normal" == 1 &
     tukey_pairwise_pattern$"nmCRPC-normal" == 1 &
@@ -398,31 +497,66 @@ ind <- which(
     tukey_pairwise_pattern$"mCRPC-new_dx"  == 0 &
     tukey_pairwise_pattern$"nmCRPC-nmCSPC" == 0 &
     tukey_pairwise_pattern$"mCRPC-nmCSPC"  == 0 &
-    tukey_pairwise_pattern$"mCRPC-nmCRPC"  == 0 &
-    rank_variance[one_way_anova_BH <= 0.05] <= 3 # just to pick out the peptides 
-  )
-boxplot_mat <- anova_dat[ind,]
-for (i in 1:nrow(boxplot_mat)){
-  boxplot_func(mat = boxplot_mat, draw = i)
-}
+    tukey_pairwise_pattern$"mCRPC-nmCRPC"  == 0 
+  ) ]
 ```
 
-We can also look at peptides that are significantly different between mCRPC patients and the other subjects.
+However, there are no peptides (among the 4538 peptides at 5\% BH FDR) that uniformly exhibit significantly higher fluorescence levels across all cancer patients compared to healthy subjects. 
 
-```{r, echo = T, fig.height = 2.8}
-ind <- which(
-    tukey_pairwise_pattern$"mCRPC-normal"  == 1 &
-    tukey_pairwise_pattern$"mCRPC-new_dx"  == 1 &
-    tukey_pairwise_pattern$"mCRPC-nmCSPC"  == 1 &
-    tukey_pairwise_pattern$"mCRPC-nmCRPC"  == 1 &
-    rank_variance[one_way_anova_BH <= 0.05] <= 13 # just to pick out some peptides with large marginal variance
-  )
-boxplot_mat <- anova_dat[ind,]
-for (i in 1:nrow(boxplot_mat)){
-  boxplot_func(mat = boxplot_mat, draw = i)
-}
+```{r, echo = T}
+which(
+  significant_positive$"new_dx-normal" == 1 &
+    significant_positive$"nmCSPC-normal"== 1 &
+    significant_positive$"nmCRPC-normal" == 1 &
+    significant_positive$"mCRPC-normal" == 1
+)
 ```
 
+This could be due to the small number of peptides (55 peptides) that have significantly higher antibody responses in ``mCRPC`` patients vs healthy subjects. Perhaps this also corroborates with the clustering patterns we observe in PCA, t-SNE and heatmap plots, where healthy subjects are "scattered all over the plots".  
+
+Nevertheless, there are 2 peptides that exhibit significantly higher fluorescence levels in ``new_dx``, ``nmCS`` and ``nmCR`` patients compared to heathy subjects. We plot their error bars.
+
+```{r, echo = T}
+healthy_ind <- which(
+  significant_positive$"new_dx-normal" == 1 &
+    significant_positive$"nmCSPC-normal"== 1 &
+    significant_positive$"nmCRPC-normal" == 1 
+)
+```
+
+```{r}
+error_bar_df <- data.frame(
+  contrasts = colnames(tukey_effect_estimate),
+  difference = unname(tukey_effect_estimate[healthy_ind[1],]),
+  lower_CI = unname(tukey_CI_lower[healthy_ind[1],]),
+  upper_CI = unname(tukey_CI_upper[healthy_ind[1],])
+)
+
+ggplot(error_bar_df, aes(x = contrasts, y = difference)) + 
+  geom_point() +
+  geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI), width=.2, position=position_dodge(0.05)) +
+  coord_flip() +
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  labs(title = row.names(tukey_effect_estimate)[healthy_ind[1]]) + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+error_bar_df <- data.frame(
+  contrasts = colnames(tukey_effect_estimate),
+  difference = unname(tukey_effect_estimate[healthy_ind[2],]),
+  lower_CI = unname(tukey_CI_lower[healthy_ind[2],]),
+  upper_CI = unname(tukey_CI_upper[healthy_ind[2],])
+)
+
+ggplot(error_bar_df, aes(x = contrasts, y = difference)) + 
+  geom_point() +
+  geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI), width=.2, position=position_dodge(0.05)) +
+  coord_flip() +
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  labs(title = row.names(tukey_effect_estimate)[healthy_ind[2]]) + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
 
 # Marginal Variance Filtering 
 

@@ -4,9 +4,9 @@ library(Rtsne)
 library(heatmap3)
 library(xlsx)
 
-# raw_data_median <- read.table("ANOVA_median.csv", header = T, row.names = NULL, sep = ",")
 # median_double_log2 <- read.table("ANOVA_median_log2log2.csv", header = T, row.names = NULL, sep = ",")
 load("remove_rep1.RData")
+raw_data_median <- read.table("ANOVA_median_remove_rep1.csv", header = T, row.names = NULL, sep = ",")
 
 ####################################################################################### 
 #                           Some Common Variables and Functions                       #
@@ -218,7 +218,7 @@ length(unique( sample_key$id )) == nrow(sample_key)
 stage_iii <- match( tail(colnames(raw_data_median), n), sample_key$id )
 sum(as.numeric( sample_key$id[stage_iii] == tail(colnames(raw_data_median), n) )) == n # check
 stage <- sample_key$stage[stage_iii]
-stage <- factor(stage) # remove unused levels
+stage <- factor(stage, levels = c("normal","new_dx","nmCSPC","nmCRPC","mCRPC")) # order levels of stages, matter for Tukey HSD 
 
 stage_iii_double_log2 <- match( tail(colnames(median_double_log2), n), sample_key$id )
 sum(as.numeric( sample_key$id[stage_iii_double_log2] == tail(colnames(median_double_log2), n) )) == n # check
@@ -472,6 +472,7 @@ heatmap3(anova_dat,
          #                                 lwd = 5  )
 )
 
+
 #---------------------------------------------------------------------------------------
 # should we also exclude some rows and/or columns with huge outliers?
 
@@ -537,13 +538,24 @@ heatmap3(heatmap_dat,
 median_subset <- raw_data_median[ (raw_data_median$BH_FDR <= 0.05) , ]
 
 tukey_adjusted_pval <- matrix(NA, nrow = nrow(median_subset), ncol = choose(nlevels(stage),2))
+tukey_effect_estimate <- matrix(NA, nrow = nrow(median_subset), ncol = choose(nlevels(stage),2))
+tukey_CI_lower <- matrix(NA, nrow = nrow(median_subset), ncol = choose(nlevels(stage),2))
+tukey_CI_upper <- matrix(NA, nrow = nrow(median_subset), ncol = choose(nlevels(stage),2))
+anova_mse <- rep( NA, nrow(median_subset) ) # just in case we need it 
 
 for (i in 1: nrow(median_subset)){
   fit1 <- aov( as.numeric(median_subset[i, (ncol(median_subset)-n+1) : ncol(median_subset)]) ~ stage )
-  tukey_adjusted_pval[i,] <- unname(TukeyHSD(fit1)$stage[,'p adj'])
+  anova_mse[i] <- unname( unlist(summary(fit1))['Mean Sq2'] )
+  fit1_TukeyHSD <- TukeyHSD(fit1)$stage
+  tukey_adjusted_pval[i,] <- unname(fit1_TukeyHSD[,'p adj'])
+  tukey_effect_estimate[i,] <- unname(fit1_TukeyHSD[,'diff'])
+  tukey_CI_lower[i,] <- unname(fit1_TukeyHSD[,'lwr'])
+  tukey_CI_upper[i,] <- unname(fit1_TukeyHSD[,'upr'])
+  print(i)
 }
-colnames(tukey_adjusted_pval) <- names(TukeyHSD(fit1)$stage[,'p adj'])
-row.names(tukey_adjusted_pval) <- median_subset$PROBE_ID
+colnames(tukey_adjusted_pval) = colnames(tukey_effect_estimate) = colnames(tukey_CI_lower) = colnames(tukey_CI_upper) <- names(fit1_TukeyHSD[,'p adj'])
+row.names(tukey_adjusted_pval) = row.names(tukey_effect_estimate) = row.names(tukey_CI_lower) = row.names(tukey_CI_upper) <- median_subset$PROBE_ID
+names(anova_mse) <- median_subset$PROBE_ID
 
 tukey_cutoff <- 0.05
 
@@ -554,7 +566,15 @@ apply(tukey_adjusted_pval,2, function(x){length(x[x <= tukey_cutoff])})
 # 1: at most cutoff, 0: more than cutoff
 tukey_pairwise_pattern <- as.data.frame(sign( -1 * sign(tukey_adjusted_pval - tukey_cutoff) + 1 )) 
 
+# 1: positive difference; 0: exactly same; -1: negative difference
+tukey_pairwise_diff <- as.data.frame(sign( tukey_effect_estimate ) ) 
+
+# element-wise multiplication: 1: both significant and positive
+significant_positive <- tukey_pairwise_pattern * tukey_pairwise_diff
+
+#----------------------------------------------------------------------------------------
 # extract some funny pattern
+
 which(
   tukey_pairwise_pattern$"new_dx-normal" == 1 &
     tukey_pairwise_pattern$"nmCSPC-normal" == 1 &
@@ -568,6 +588,34 @@ which(
     tukey_pairwise_pattern$"mCRPC-nmCRPC"  == 0 &
     median_subset$rank_variance <= 3
   )
+
+which(
+  significant_positive$"new_dx-normal" == 1 &
+    significant_positive$"nmCSPC-normal" == 1 &
+    significant_positive$"nmCRPC-normal" == 1 &
+    significant_positive$"mCRPC-normal"  == 1
+)
+
+which(
+  ( significant_positive$"new_dx-normal" == 1 &
+    significant_positive$"nmCSPC-normal" == 1 &
+    significant_positive$"nmCRPC-normal" == 1 &
+    significant_positive$"mCRPC-normal"  == 1 ) &
+   ( significant_positive$"nmCSPC-new_dx" != 1 &
+      significant_positive$"nmCRPC-new_dx" != 1 &
+      significant_positive$"mCRPC-new_dx"  != 1 &
+      significant_positive$"nmCRPC-nmCSPC" != 1 &
+      significant_positive$"mCRPC-nmCSPC"  != 1 &
+      significant_positive$"mCRPC-nmCRPC"  != 1 ) 
+)
+
+which(
+  significant_positive$`mCRPC-normal` == 1 &
+    significant_positive$`mCRPC-new_dx`== 1 &
+    significant_positive$`mCRPC-nmCSPC` == 1 &
+    significant_positive$`mCRPC-nmCRPC` == 1
+)
+
 
 #----------------------------------------------------------------------------------------
 # write signif peptides and signif proteins into multiple worksheets of an Excel file
@@ -700,4 +748,14 @@ boxplot_func(mat = boxplot_mat, draw = 4)
 boxplot_func(mat = boxplot_mat, draw = 5)
 boxplot_func(mat = boxplot_mat, draw = 6)
 
+# save results
+# save(one_way_anova_pval,
+#      rank_variance,
+#      anova_dat,
+#      anova_mse,
+#      tukey_adjusted_pval,
+#      tukey_effect_estimate,
+#      tukey_CI_lower,
+#      tukey_CI_upper,
+#      file = "remove_rep1.RData")
 
