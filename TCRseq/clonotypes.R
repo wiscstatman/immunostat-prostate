@@ -1,5 +1,4 @@
 library(tidyverse)
-library(stringr) # strsplit
 library(janitor) # tabyl
 
 # download tabs-delimited .txt clonotype files from K-drive
@@ -22,14 +21,21 @@ dat <- clonotype_files %>%
         antigen = strsplit(x, "-", fixed = T)[[1]][1],
         sample = paste0( "S-", strsplit(strsplit(x, "_", fixed = T)[[1]][1], "-", fixed = T)[[1]][2] ),
         # rev_cumsum = rev( cumsum( rev(cloneFraction) ) ), # cumulative clone fraction from bottom row to top row
-        cumsum = cumsum( cloneFraction ) # cumulative clone fraction from top row to bottom row
+        cumsum_cloneFrac = cumsum( cloneFraction ) # cumulative clone fraction from top row to bottom row
       ) %>%
-      select(antigen, sample, cloneCount, cloneFraction, cumsum, aaSeqCDR3, everything()) # rearrange columns
+      select(antigen, sample, cloneCount, cloneFraction, cumsum_cloneFrac, aaSeqCDR3, everything()) # rearrange columns
   } ) %>% 
   reduce(rbind) # reduce(append) lists of tables into a table 
 
+
 # memory size of data table
 print(object.size(dat), units = "GB")
+
+
+# No NA
+dat %>% 
+  select_if(function(x) any(is.na(x))) %>% 
+  summarise_each(~sum(is.na(.)))
 
 
 # how many rows for each sample
@@ -42,7 +48,7 @@ dat %>%
   ) 
 
 # are targetSequences unique within each sample?  YES!
-# are aaSeqCDR3 unique within each sample?  NO!
+# are aaSeqCDR3 unique within each sample?  NO! -- not surprising since different triplicates in reading frame translated to same aa?
 
 
 #--------------------------------------------------------------------------------------------------------------
@@ -79,6 +85,22 @@ dat %>% filter(antigen == "NegCont", sample == "S-2") %>% head()
 NegCont <- dat %>% filter(antigen == "NegCont")
 
 
+# NegCont's counts of targetSequences at different thresholds
+map(c(.01, .007, .006, .005, .001, .0001), ~ nrow(filter(NegCont, cloneFraction > .))) %>% unlist() %>%
+  set_names(nm = paste0(c(.01, .007, .006, .005, .001, .0001)*100,"%"))
+
+
+# Any NegCont targetSequences with kinda high cloneFrac? They are all supposed to be small?
+NegCont %>% filter(cloneFraction > 0.01)
+NegCont %>% filter(cloneFraction > 0.007)
+
+
+# NegCont_S-2 has small number of targetSequences, cloneFrac high even with cloneCount = 2
+# NegCont_S-1 only has 1 targetSeq with cloneFraction slightly higher than 0.01, the rest lower than that
+# Is cloneFraction = 0.01 ie. 1% good cutoff? 
+# maybe also check targetQualities when cloneFraction is low   
+
+
 # filter non-NegCont samples
 dat_ex_NegCont <- dat %>% filter(antigen != "NegCont")
 dat_ex_NegCont %>% group_by(antigen, sample) %>% tally() # check
@@ -91,48 +113,60 @@ length( which( NegCont$targetSequences %in% dat_ex_NegCont$targetSequences ) )
 # about half of targetSequences (6572 out of 12663 rows) among non-NegCont samples have counterparts in NegCont data
 
 
-summary(dat$cloneFraction[dat$antigen=="NegCont"])
-summary(dat$cloneFraction[dat$antigen=="NegCont" & dat$cloneFraction < 0.05])
-hist(dat$cloneFraction[dat$antigen=="NegCont" & dat$cloneFraction < 1E-4])
-
-
 #--------------------------------------------------------------------------------------------------------------
-# investigate overall distribution of cloneFraction
+# investigate overall distribution of cloneFraction exlcuding NegCont
 
-prcntile <- c(.95, .975, .99, .995, .999)
+prcntile <- c(.95, .97, .98, .99, .995)
 
-summary(dat$cloneFraction)
-quantile(dat$cloneFraction, probs = prcntile)
-ecdf(dat$cloneFraction)(0.001) 
-# 99.7% of "target sequences" have clone fraction lower than 0.1%
+summary(dat_ex_NegCont$cloneFraction)
+quantile(dat_ex_NegCont$cloneFraction, probs = prcntile)
+round(ecdf(dat_ex_NegCont$cloneFraction)(c(0.0001, 0.001, 0.01)), 4)
+# 95.5% of "target sequences" have clone fraction lower than 0.1%
+# 98.66% of "target sequences" have clone fraction lower than 1%
 # a lot of background noise?
 
 
 # c(.95, .975, .99, .995, .999)-quantiles of clone fraction for each sample
-dat %>%
+dat_ex_NegCont %>%
   group_by(antigen, sample) %>%
   summarize_at( vars(cloneFraction), map( prcntile, ~ partial(quantile, probs = .x) ) %>%
                   set_names( nm = paste0("cloneFrac_", prcntile*100,"%") ) ) %>%
-  add_column(seq_counts = dat %>% group_by(antigen, sample) %>% tally() %>% pull(n)) %>%
+  add_column(seq_counts = dat_ex_NegCont %>% group_by(antigen, sample) %>% tally() %>% pull(n)) %>%
   select(antigen, sample, seq_counts, everything())
 
 
-# cumulative cloneFraction for top 10 sequences (in terms of highest cloneFraction) for each sample
-dat %>%
+# cumulative cloneFraction for top 15 sequences (in terms of highest cloneFraction) for each sample
+dat_ex_NegCont %>%
   group_by(antigen, sample) %>%
-  top_n(10, cloneFraction) %>%
-  select(antigen, sample, cumsum) %>%
+  top_n(15, cloneFraction) %>%
+  select(antigen, sample, cumsum_cloneFrac) %>%
   mutate(
-    cumsum = round(cumsum,3), 
+    cumsum_cloneFrac = round(cumsum_cloneFrac,3), 
     sequence = paste0("seq_",row_number())
     ) %>%
-  pivot_wider(names_from = sequence, values_from = cumsum) %>%
-  add_column(seq_counts = dat %>% group_by(antigen, sample) %>% tally() %>% pull(n)) %>%
-  select(antigen, sample, seq_counts, seq_1:seq_10)
+  pivot_wider(names_from = sequence, values_from = cumsum_cloneFrac) %>%
+  add_column(seq_counts = dat_ex_NegCont %>% group_by(antigen, sample) %>% tally() %>% pull(n)) %>%
+  select(antigen, sample, seq_counts, seq_1:seq_15)
+
+
+# cloneFraction for top 15 sequences (in terms of highest cloneFraction) for each sample
+dat_ex_NegCont %>%
+  group_by(antigen, sample) %>%
+  top_n(15, cloneFraction) %>%
+  select(antigen, sample, cloneFraction) %>%
+  mutate(
+    sequence = paste0("seq_",row_number())
+  ) %>%
+  pivot_wider(names_from = sequence, values_from = cloneFraction) %>%
+  add_column(seq_counts = dat_ex_NegCont %>% group_by(antigen, sample) %>% tally() %>% pull(n)) %>%
+  select(antigen, sample, seq_counts, seq_1:seq_15)
+
 
 
 #--------------------------------------------------------------------------------------------------------------
-# investigate minQualCDR3 -- score of sequence qualities?
+# investigate minQualCDR3 -- score of sequence qualities ?
+# low cloneFraction may indicate background noise which may be reflected with lower targetQualities ?
+# probably good to disregard very weak signal with bad target qualities ?
 
 dat %>% 
   tabyl(minQualCDR3) %>% 
@@ -147,11 +181,11 @@ lower_quality <- dat %>%
   group_by(antigen, sample) %>%
   # top_n(1, minQualCDR3) %>%
   # top_n(1, cloneFraction) %>% # keep row with highest cloneFraction among those with minQualCDR3 < 38 for each sample
-  top_n(-1, cumsum) %>% # keep row with smallest cumulative cloneFraction among those with minQualCDR3 < 38 for each sample
+  top_n(-1, cumsum_cloneFrac) %>% # keep row with smallest cumulative cloneFraction among those with minQualCDR3 < 38 for each sample
   ungroup()
 lower_quality
-# preferably all rows in lower_quality to have high cumsum of cloneFraction, indicating only noises have lower CDR3 quality
-# AR811-5_S1, NegCont-1_S6, Pap19-5_S5, PosCont-1_S7 have low cloneFraction but also low cumsum
+# preferably all rows in lower_quality to have low cloneFraction & high cumsum of cloneFraction, indicating only noises have lower CDR3 quality
+# AR811_S-5 & Pap19_S-5 have low cloneFraction but also low cumsum_cloneFrac
 # indicating something weird about the target sequences for these samples?
 
 
@@ -163,16 +197,48 @@ lower_quality[lower_quality$cloneFraction ==max(lower_quality$cloneFraction),]
 #--------------------------------------------------------------------------------------------------------------
 # Decide what cutoff to remove "background-noise" sequences
 
+cloneFrac_cutoff <- 0.0001 # clone fraction for each targetSequence must be at least 0.01%
+cloneCount_cutoff <- 2 # every targetSequence must have at least 2 clone counts
 
+dat_cutoff <- dat_ex_NegCont %>% 
+  filter(cloneFraction >= cloneFrac_cutoff, cloneCount >= cloneCount_cutoff) %>% 
+  select(-targetQualities)
 
-
-#--------------------------------------------------------------------------------------------------------------
-# pairwise comparison 
-
-# compare clone fraction
-
+# some summary data after cutoff
+dat_cutoff %>% group_by(antigen, sample) %>% top_n(1, cumsum_cloneFrac) %>%
+  add_column(n = dat_cutoff %>% group_by(antigen, sample) %>% tally() %>% pull(n)) %>%
+  add_column(minQual = dat_cutoff %>% group_by(antigen, sample) %>% summarize_at(vars(minQualCDR3), min) %>% pull(minQualCDR3)) %>%
+  select(antigen, sample, n, cumsum_cloneFrac, minQual)
 
 
 #--------------------------------------------------------------------------------------------------------------
 # overall target sequence comparison 
+
+dat_cutoff <- dat_cutoff %>%
+  unite(antigen_sample, antigen, sample, sep = "_", remove = F)
+
+targetSeq_summary <- dat_cutoff %>%
+  tabyl(targetSequences, antigen_sample) %>%
+  adorn_totals("col") %>%
+  arrange(desc(Total)) %>%
+  filter(Total >= 2)
+
+# compare samples of the same antigen
+antigen_compare <- function(ANTIGEN){
+  targetSeq_summary %>% 
+    select(contains(ANTIGEN)) %>%
+    mutate(sum = rowSums(.) ) %>%
+    add_column(targetSequences = targetSeq_summary %>% pull(targetSequences)) %>%
+    select(targetSequences, sum) %>% 
+    arrange(desc(sum)) %>%
+    filter(sum > 1)
+}
+
+# AR805 comparison 
+antigen_compare("AR805")
+antigen_compare("PAP11")
+antigen_compare("PAP13")
+antigen_compare("PAP19")
+
+
 
