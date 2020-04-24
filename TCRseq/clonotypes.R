@@ -148,6 +148,25 @@ dat_ex_NegCont %>%
   add_column(seq_counts = dat_ex_NegCont %>% group_by(antigen, sample) %>% tally() %>% pull(n)) %>%
   select(antigen, sample, seq_counts, seq_1:seq_15)
 
+cumcloneFrac_topSeq_df <- dat_ex_NegCont %>%
+  group_by(antigen, sample) %>%
+  top_n(10, cloneFraction) %>%
+  top_n(1, cumsum_cloneFrac) %>%
+  mutate( cumsum_cloneFrac = round(cumsum_cloneFrac,4) ) %>%
+  unite(antigen_sample, antigen, sample, sep = "_", remove = T) %>%
+  select(antigen_sample, cumsum_cloneFrac) 
+
+ggplot(data = cumcloneFrac_topSeq_df, aes(x = reorder(antigen_sample, -cumsum_cloneFrac), y = cumsum_cloneFrac)) +
+  geom_bar(stat = "identity", fill = "steelblue", width = 0.5) +
+  geom_text( aes(label = paste0(cumsum_cloneFrac*100,"%","\n(n=",
+                                dat_ex_NegCont %>% group_by(antigen, sample) %>% tally() %>% pull(n),")")), 
+            vjust=-0.3, size=3 ) +
+  labs(x = "antigen_sample", y = "cumulative clone fraction",
+       title = "Cumulative clone fraction for top 10 sequences of each sample
+       (n = total number of target sequences for each sample)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x=element_text(angle=45, hjust=1))
+
 
 # cloneFraction for top 15 sequences (in terms of highest cloneFraction) for each sample
 dat_ex_NegCont %>%
@@ -161,7 +180,21 @@ dat_ex_NegCont %>%
   add_column(seq_counts = dat_ex_NegCont %>% group_by(antigen, sample) %>% tally() %>% pull(n)) %>%
   select(antigen, sample, seq_counts, seq_1:seq_15)
 
+cloneFrac_topSeq_df <- dat_ex_NegCont %>%
+  group_by(antigen, sample) %>%
+  top_n(10, cloneFraction) %>%
+  mutate( sequence = paste0("seq_",row_number()),
+          sequence = factor(sequence, levels = paste0("seq_",1:10))) %>% 
+  unite(antigen_sample, antigen, sample, sep = "_", remove = T) %>%
+  select(antigen_sample, sequence, cloneFraction) %>%
+  filter(sequence %in% paste0("seq_", 1:10) )
 
+ggplot(cloneFrac_topSeq_df, aes(x=sequence, y=cloneFraction, group=antigen_sample)) +
+  geom_line(aes(color=antigen_sample)) +
+  geom_point(aes(color=antigen_sample)) +
+  labs(title = "Clone fraction for top 10 sequences of each sample") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x=element_text(angle=45, hjust=1))
 
 #--------------------------------------------------------------------------------------------------------------
 # investigate minQualCDR3 -- score of sequence qualities ?
@@ -197,11 +230,11 @@ lower_quality[lower_quality$cloneFraction ==max(lower_quality$cloneFraction),]
 #--------------------------------------------------------------------------------------------------------------
 # Decide what cutoff to remove "background-noise" sequences
 
-cloneFrac_cutoff <- 0.0001 # clone fraction for each targetSequence must be at least 0.01%
-cloneCount_cutoff <- 2 # every targetSequence must have at least 2 clone counts
+cloneFrac_cutoff <- 0.01 # clone fraction for each targetSequence must be above 1%
+cloneCount_cutoff <- 2 # every targetSequence must have more than 2 clones
 
 dat_cutoff <- dat_ex_NegCont %>% 
-  filter(cloneFraction >= cloneFrac_cutoff, cloneCount >= cloneCount_cutoff) %>% 
+  filter(cloneFraction > cloneFrac_cutoff, cloneCount > cloneCount_cutoff) %>% 
   select(-targetQualities)
 
 # some summary data after cutoff
@@ -223,7 +256,8 @@ targetSeq_summary <- dat_cutoff %>%
   arrange(desc(Total)) %>%
   filter(Total >= 2)
 
-# compare samples of the same antigen
+
+# compare samples from certain antigen(s)
 antigen_compare <- function(ANTIGEN){
   targetSeq_summary %>% 
     select(contains(ANTIGEN)) %>%
@@ -234,11 +268,66 @@ antigen_compare <- function(ANTIGEN){
     filter(sum > 1)
 }
 
-# AR805 comparison 
+# same antigen comparison 
 antigen_compare("AR805")
 antigen_compare("PAP11")
 antigen_compare("PAP13")
 antigen_compare("PAP19")
 
+# more antigen comparison appearing in any one sample belonging to any one of the specified antigen(s)
+antigen_compare(c("PAP11", "PAP13", "PAP19"))
+antigen_compare(c("AR805", "AR811"))
+antigen_compare(c("AR811", "PAP11", "PAP13"))
+
+# more specific antigen_sample comparison
+antigen_compare(c("AR811_S-5", "PAP19_S-5"))
+antigen_compare(c("SSX2103_S-5", "SSX241_S-4"))
 
 
+# we want to know cloneFraction in summary too
+
+nonzero_index <- which( subset(targetSeq_summary, select = -Total) == 1, arr.ind = T )
+summary_cloneFrac <- targetSeq_summary
+
+# NOw, replace the ones with their cloneFrac
+# maybe a more efficient coding than this?
+
+for (i in 1: nrow(nonzero_index)){
+  ant_samp <- colnames(targetSeq_summary)[ nonzero_index[i,]['col'] ]
+  targ_seq <- targetSeq_summary$targetSequences[ nonzero_index[i,]['row'] ]
+  summary_cloneFrac[ nonzero_index[i,]['row'] , nonzero_index[i,]['col'] ] <- 
+    dat_cutoff$cloneFraction[ dat_cutoff$antigen_sample == ant_samp & dat_cutoff$targetSequences == targ_seq ]
+}
+
+summary_cloneFrac <- summary_cloneFrac %>%
+  mutate(
+    sum_cloneFrac = rowSums( subset(summary_cloneFrac, select = -c(targetSequences, Total)) )
+  ) %>%
+  rename(nonzero_counts = Total) %>%
+  arrange(desc(nonzero_counts), desc(sum_cloneFrac)) %>%
+  left_join( dat_cutoff %>% select(targetSequences,aaSeqCDR3) %>% distinct(targetSequences,aaSeqCDR3), by = "targetSequences" ) %>%
+  select(targetSequences, aaSeqCDR3, everything())
+
+
+# bar-plot each row of summary_cloneFrac
+
+barplot_func <- function(row){
+  barplot_df <- subset(summary_cloneFrac, select = -c(nonzero_counts, sum_cloneFrac))[row,] 
+  barplot_title <- paste0("targetSequence = ", barplot_df$targetSequences, 
+                          "\naaSeqCDR3 = ", barplot_df$aaSeqCDR3)
+  
+  barplot_df <- barplot_df %>%
+    select(-c(targetSequences, aaSeqCDR3)) %>%
+    pivot_longer(everything(), names_to = "antigen_sample", values_to = "clone_fraction") %>%
+    mutate(clone_fraction = round(clone_fraction,4)) %>%
+    filter(clone_fraction > 0) 
+  
+  ggplot(data = barplot_df, aes(x = reorder(antigen_sample, -clone_fraction), y = clone_fraction)) +
+    geom_bar(stat = "identity", fill = "steelblue", width = 0.5) +
+    geom_text(aes(label = paste0(clone_fraction*100,"%")), vjust=-0.3, size=4) +
+    labs(x = "antigen_sample", title = barplot_title) +
+    theme(plot.title = element_text(hjust = 0.5),
+          axis.text.x=element_text(angle=45, hjust=1))
+}
+
+barplot_func(3)
