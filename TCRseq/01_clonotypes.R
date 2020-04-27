@@ -1,5 +1,6 @@
 library(tidyverse)
 library(janitor) # tabyl
+library(ggplot2)
 
 # download tabs-delimited .txt clonotype files from K-drive
 # compile clonotype files across samples of the same antigen (and maybe across different antigens ?)
@@ -38,12 +39,12 @@ dat %>%
   summarise_each(~sum(is.na(.)))
 
 
-# how many rows for each sample
+# how many rows (unique targetSequences) for each sample
 dat %>%
   group_by(antigen, sample) %>%
   summarize(
-    nrows = n(), 
-    unique_targetSeq_counts = length(unique(targetSequences)),
+    sum_cloneCounts = sum(cloneCount), 
+    unique_targetSeq_counts = length(unique(targetSequences)), # equal to nrows=n()
     unique_aaSeqCDR3_counts = length(unique(aaSeqCDR3))
   ) 
 
@@ -86,7 +87,7 @@ NegCont <- dat %>% filter(antigen == "NegCont")
 
 
 # NegCont's counts of targetSequences at different thresholds
-map(c(.01, .007, .006, .005, .001, .0001), ~ nrow(filter(NegCont, cloneFraction > .))) %>% unlist() %>%
+map(c(.01, .007, .006, .005, .001, .0001), ~ nrow(filter(NegCont, sample == "S-1", cloneFraction > .))) %>% unlist() %>%
   set_names(nm = paste0(c(.01, .007, .006, .005, .001, .0001)*100,"%"))
 
 
@@ -111,6 +112,39 @@ nrow(dat_ex_NegCont) # in total 12663 rows
 length( which( dat_ex_NegCont$targetSequences %in% NegCont$targetSequences ) ) 
 length( which( NegCont$targetSequences %in% dat_ex_NegCont$targetSequences ) ) 
 # about half of targetSequences (6572 out of 12663 rows) among non-NegCont samples have counterparts in NegCont data
+
+
+# check clone fraction distribution among those non-negative samples with targetSequences that also appear in negative controls
+# dat_ex_NegCont %>%
+#   filter(targetSequences %in% NegCont$targetSequences) %>%
+#   group_by(antigen, sample) %>%
+#   summarize(
+#     targetSeq_counts = n(),
+#     maximum_cloneFrac = round(max(cloneFraction),4),
+#     maximum_cloneCount = max(cloneCount)
+#   ) %>% arrange(desc(targetSeq_counts))
+dat_ex_NegCont %>%
+  filter(targetSequences %in% NegCont$targetSequences) %>%
+  group_by(antigen, sample) %>%
+  summarize(
+    targetSeq_counts = n(),
+    maximum_cloneFrac = round(max(cloneFraction),4),
+    maximum_cloneCount = max(cloneCount)
+  ) %>% ungroup() %>% mutate(
+    targetSeq_percent = targetSeq_counts / (dat_ex_NegCont %>% group_by(antigen, sample) %>% tally() %>% pull(n))
+  ) %>% select(-targetSeq_counts) %>% 
+  arrange(desc(maximum_cloneFrac))
+
+
+# check clone fraction distribution among those non-negative samples with targetSequences that do NOT appear in negative controls
+dat_ex_NegCont %>%
+  filter(!(targetSequences %in% NegCont$targetSequences)) %>%
+  group_by(antigen, sample) %>%
+  summarize(
+    targetSeq_counts = n(),
+    maximum_cloneFrac = round(max(cloneFraction),4),
+    maximum_cloneCount = max(cloneCount)
+  ) %>% arrange(desc(targetSeq_counts))
 
 
 #--------------------------------------------------------------------------------------------------------------
@@ -158,12 +192,13 @@ cumcloneFrac_topSeq_df <- dat_ex_NegCont %>%
 
 ggplot(data = cumcloneFrac_topSeq_df, aes(x = reorder(antigen_sample, -cumsum_cloneFrac), y = cumsum_cloneFrac)) +
   geom_bar(stat = "identity", fill = "steelblue", width = 0.5) +
+  coord_cartesian(ylim=c(0, 1.1)) +
   geom_text( aes(label = paste0(cumsum_cloneFrac*100,"%","\n(n=",
-                                dat_ex_NegCont %>% group_by(antigen, sample) %>% tally() %>% pull(n),")")), 
-            vjust=-0.3, size=3 ) +
+                                dat_ex_NegCont %>% group_by(antigen, sample) %>% summarize(n = sum(cloneCount)) %>% pull(n),")")), 
+             vjust=-0.3, size=3 ) +
   labs(x = "antigen_sample", y = "cumulative clone fraction",
        title = "Cumulative clone fraction for top 10 sequences of each sample
-       (n = total number of target sequences for each sample)") +
+       (n = total number of clones for each sample)") +
   theme(plot.title = element_text(hjust = 0.5),
         axis.text.x=element_text(angle=45, hjust=1))
 
@@ -196,6 +231,26 @@ ggplot(cloneFrac_topSeq_df, aes(x=sequence, y=cloneFraction, group=antigen_sampl
   theme(plot.title = element_text(hjust = 0.5),
         axis.text.x=element_text(angle=45, hjust=1))
 
+cloneFrac_topSeq_df2 <- dat_ex_NegCont %>%
+  group_by(antigen, sample) %>%
+  top_n(3, cloneFraction) %>%
+  mutate( sequence = paste0("seq_",row_number()),
+          sequence = factor(sequence, levels = paste0("seq_",1:10))) %>% 
+  unite(antigen_sample, antigen, sample, sep = "_", remove = T) %>%
+  select(antigen_sample, sequence, cloneFraction) %>%
+  group_by(antigen_sample) %>% 
+  mutate(mx = max(cloneFraction)) %>% 
+  arrange(desc(mx), desc(cloneFraction)) 
+
+ggplot(cloneFrac_topSeq_df2, aes(x=reorder(antigen_sample, -mx), y=cloneFraction, fill=sequence)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  geom_text( aes(label = paste0(round(cloneFraction*100,1),"%")), position = position_dodge(0.9), vjust=-0.3, size=2.5 ) +
+  labs(x = "antigen_sample", title = "Clone fraction for top 3 sequences of each sample") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x=element_text(angle=45, hjust=1),
+        legend.position = "bottom")
+
+
 #--------------------------------------------------------------------------------------------------------------
 # investigate minQualCDR3 -- score of sequence qualities ?
 # low cloneFraction may indicate background noise which may be reflected with lower targetQualities ?
@@ -222,6 +277,38 @@ lower_quality
 # indicating something weird about the target sequences for these samples?
 
 
+dat_ex_NegCont %>% 
+  tabyl(minQualCDR3) %>% 
+  adorn_pct_formatting() %>%
+  map_df(rev) %>%
+  rename(targetSeq_counts = n)
+
+minQual_df <- dat_ex_NegCont %>% 
+  tabyl(minQualCDR3) %>% 
+  map_df(rev) %>%
+  mutate(percent = ifelse(minQualCDR3 <= 33, sum(percent[minQualCDR3 <= 33]), percent)) %>%
+  select(minQualCDR3, percent) %>%
+  filter(minQualCDR3 >= 33) %>%
+  mutate(minQualCDR3 = as.character(minQualCDR3),
+         minQualCDR3 = ifelse(minQualCDR3 == 33, "33 and below", minQualCDR3),
+         minQualCDR3 = factor(minQualCDR3, levels = c(38:34,"33 and below")))
+
+ggplot(data=minQual_df, aes(x=minQualCDR3, y=percent)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  geom_text(aes(label=paste0(round(percent,4)*100, "%")), vjust=-.3, size=3.5)+
+  labs(title = "Percentage of targetSequences among non-negative-control samples with their quality scores") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+minQual_df2 <- dat_ex_NegCont %>% 
+  filter(minQualCDR3 < 38) %>% # extract rows with minQualCDR3 < 38
+  group_by(antigen, sample) %>%
+  top_n(-1, cumsum_cloneFrac) %>% # keep row with smallest cumulative cloneFraction among those with minQualCDR3 < 38 for each sample
+  unite(antigen_sample, antigen, sample, sep = "_", remove = T) %>%
+  select(antigen_sample, cloneCount, cloneFraction, minQualCDR3) %>%
+  arrange(desc(cloneFraction))
+  
+
 summary(lower_quality$cloneFraction)
 table(lower_quality$cloneFraction)
 lower_quality[lower_quality$cloneFraction ==max(lower_quality$cloneFraction),]
@@ -230,18 +317,24 @@ lower_quality[lower_quality$cloneFraction ==max(lower_quality$cloneFraction),]
 #--------------------------------------------------------------------------------------------------------------
 # Decide what cutoff to remove "background-noise" sequences
 
-cloneFrac_cutoff <- 0.01 # clone fraction for each targetSequence must be above 1%
-cloneCount_cutoff <- 2 # every targetSequence must have more than 2 clones
+# cloneFrac_cutoff <- 0.0001 # clone fraction for each targetSequence must be above 0.01%
+# cloneCount_cutoff <- 2 # every targetSequence must have more than 2 clones
+cloneFrac_cutoff <- 0 # no cutoff
+cloneCount_cutoff <- 0 # no cutoff
 
 dat_cutoff <- dat_ex_NegCont %>% 
   filter(cloneFraction > cloneFrac_cutoff, cloneCount > cloneCount_cutoff) %>% 
   select(-targetQualities)
 
 # some summary data after cutoff
-dat_cutoff %>% group_by(antigen, sample) %>% top_n(1, cumsum_cloneFrac) %>%
-  add_column(n = dat_cutoff %>% group_by(antigen, sample) %>% tally() %>% pull(n)) %>%
-  add_column(minQual = dat_cutoff %>% group_by(antigen, sample) %>% summarize_at(vars(minQualCDR3), min) %>% pull(minQualCDR3)) %>%
-  select(antigen, sample, n, cumsum_cloneFrac, minQual)
+dat_cutoff %>% group_by(antigen, sample) %>% 
+  mutate(
+    targetSeq_counts = n(),
+    minQual = min(minQualCDR3)
+  ) %>% top_n(1, cumsum_cloneFrac) %>%
+  select(antigen, sample, cumsum_cloneFrac, targetSeq_counts, minQual) %>%
+  arrange(desc(cumsum_cloneFrac))
+
 
 
 #--------------------------------------------------------------------------------------------------------------
@@ -284,12 +377,26 @@ antigen_compare(c("AR811_S-5", "PAP19_S-5"))
 antigen_compare(c("SSX2103_S-5", "SSX241_S-4"))
 
 
+# antigen-specific only 
+# antigen_compare_specific <- function(ANTIGEN){
+#   targetSeq_summary %>%
+#     filter(Total ==2) %>%
+#     filter_at(vars(contains(ANTIGEN)), ~ . == 1) 
+#   }
+
+# same antigen comparison 
+# antigen_compare_specific("AR805")
+# antigen_compare_specific("PAP11")
+# antigen_compare_specific("PAP13")
+# antigen_compare_specific("PAP19")
+
+
 # we want to know cloneFraction in summary too
 
 nonzero_index <- which( subset(targetSeq_summary, select = -Total) == 1, arr.ind = T )
 summary_cloneFrac <- targetSeq_summary
 
-# NOw, replace the ones with their cloneFrac
+# Now, replace the ones with their cloneFrac
 # maybe a more efficient coding than this?
 
 for (i in 1: nrow(nonzero_index)){
@@ -309,6 +416,20 @@ summary_cloneFrac <- summary_cloneFrac %>%
   select(targetSequences, aaSeqCDR3, everything())
 
 
+# antigen-specific only 
+antigen_compare_specific <- function(ANTIGEN){
+  summary_cloneFrac %>%
+    filter(nonzero_counts ==2) %>%
+    filter_at(vars(contains(ANTIGEN)), ~ . >0) 
+}
+
+# same antigen comparison 
+antigen_compare_specific("AR805")
+antigen_compare_specific("PAP11")
+antigen_compare_specific("PAP13")
+antigen_compare_specific("PAP19")
+
+
 # bar-plot each row of summary_cloneFrac
 
 barplot_func <- function(row){
@@ -319,15 +440,18 @@ barplot_func <- function(row){
   barplot_df <- barplot_df %>%
     select(-c(targetSequences, aaSeqCDR3)) %>%
     pivot_longer(everything(), names_to = "antigen_sample", values_to = "clone_fraction") %>%
-    mutate(clone_fraction = round(clone_fraction,4)) %>%
+    # mutate(clone_fraction = round(clone_fraction,4)) %>%
     filter(clone_fraction > 0) 
   
   ggplot(data = barplot_df, aes(x = reorder(antigen_sample, -clone_fraction), y = clone_fraction)) +
-    geom_bar(stat = "identity", fill = "steelblue", width = 0.5) +
-    geom_text(aes(label = paste0(clone_fraction*100,"%")), vjust=-0.3, size=4) +
+    geom_bar(stat = "identity", fill = "steelblue", width = 0.3) +
+    geom_text(aes(label = paste0(round(clone_fraction*100,4),"%")), vjust=-0.3, size=3) +
     labs(x = "antigen_sample", title = barplot_title) +
-    theme(plot.title = element_text(hjust = 0.5),
+    theme(plot.title = element_text(hjust = 0.5, size = 8),
           axis.text.x=element_text(angle=45, hjust=1))
 }
 
 barplot_func(3)
+
+barplot_ind <- which(summary_cloneFrac$targetSequences %in% antigen_compare_specific("PAP13")$targetSequences) 
+barplot_func( barplot_ind[1] )
