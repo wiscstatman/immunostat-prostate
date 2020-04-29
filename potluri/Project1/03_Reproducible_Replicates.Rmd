@@ -1,0 +1,152 @@
+---
+title: "Reproducible Replicates in Peptide Array Data" 
+author: "Tun Lee Ng and Michael A. Newton"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  pdf_document:
+    toc: true
+    number_sections: true
+header-includes:
+   \usepackage{enumerate}
+   \usepackage{amsmath}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+# Introduction 
+
+This project aims to characterize antibody responses to a wide variety of proteins in prostate cancer patients at different stages of the disease. 16-mer peptides spanning the amino acid sequences of these 1611 gene products, and overlapping by 12 amino acids, were used to generate a microarray comprising 177,604 peptides. In this study, there were healthy subjects and patients with different stages of prostate cancer  
+
+*  ``new_dx``: newly diagnosed,  
+* ``nmCSPC``: non-metastatic castration-sensitive,  
+* ``mCSPC``: metastatic castration-sensitive,  
+* ``nmCRPC``: non-metastatic castration-resistant,  
+* ``mCRPC``: metastatic castration-resistant  
+
+Recall that these are not distinct patient counts, because there were 11 patients who were measured at two different stages. We removed these patients' earlier records to ensure unique patient data. Number of replicates for each patient, ``rep`` could 1, 2, or 3. We remove patients with no technical replicates. So, now we are left with: 
+
+```{r, , fig.height = 3.4}
+library(kableExtra)
+library(ggplot2)
+library(tidyverse) # make sure you have the latest tidyverse !
+library(lme4) # linear mixed effects model
+
+####################################################################################### 
+#                                      Data Processing                                #
+####################################################################################### 
+
+array_id_key = read_csv("sample_key_project1.csv") %>%
+  janitor::clean_names() %>%  # unify all column names to snake_case
+  rename(stage = condition,
+         array_id = "file_name") %>%
+  mutate(id = str_replace_all(id, " ", ""),
+         id = str_to_lower(id),
+         id = str_replace_all(id, "/", ""),
+         stage = as_factor(stage),
+         stage = fct_recode(stage,  # rename factor levels
+                            "normal" = "Normal_male_controls",
+                            "new_dx" = "Newly_diagnosed",
+                            "nmCSPC" = "PSA-recurrent_nonMet",
+                            "mCSPC" = "Met",
+                            "nmCRPC" = "Castration-resistent_nonMet",
+                            "mCRPC" = "Castration-resistent_Met",
+                            "binding_buffer" = "Binding buffer alone"))
+
+# drop binding buffer
+array_id_key <- array_id_key[!(array_id_key$stage=="binding_buffer"),]
+array_id_key$stage <- factor(array_id_key$stage) # remove binding_buffer level
+
+# remove patients whose rep == 1
+sample_key = array_id_key %>%
+  group_by(id, stage) %>%
+  summarize(n = n()) %>%  # assign (id,stage) group counts to the variable "n"
+  ungroup() %>% 
+  filter(n >= 2) %>%
+  select(-n) # drop the column "n"
+array_id_key = array_id_key %>%
+  filter(id %in% sample_key$id)
+
+# Ensuring only distinct patients
+
+# 11 patients with replicates in 2 stages
+ids_to_remove = c("pdv004", #1
+                  "arv003", #2
+                  "pap092", #3
+                  "pap032", #4
+                  "adt034", #5
+                  "adt181", #6
+                  "adt223", #7
+                  "pdv008", #8
+                  "pap123", #9
+                  "pap067", #10
+                  "adt143") #11
+
+# drop patients' earlier records
+array_id_key = array_id_key %>%
+  filter(!(id %in% ids_to_remove))
+
+# check patient counts (finally distinct patients)
+distinct_patients_with_reps <- array_id_key %>%
+  group_by(id, stage) %>%
+  summarize() %>%
+  group_by(stage) %>%
+  tally()
+
+# extract stages of patients
+# order levels of stages, matter for Tukey HSD
+stage <- factor(sample_key$stage, levels = c("normal","new_dx","nmCSPC","nmCRPC","mCRPC")) 
+
+ggplot(data=distinct_patients_with_reps, aes(x=stage, y=n)) + 
+  geom_bar(stat="identity", width=0.5 , fill="steelblue") + 
+  geom_text(aes(label=n), vjust=-0.3, size=4) +
+  theme_minimal()
+```
+
+Next, we take $\log_2$ transformation of the fluorescence intensity.
+
+# Assess Reproducibility of Replicates
+
+Hemanth has assessed the issue of replicate reproducibility by looking at correlation coefficients between patients' fluorescence levels. Another approach is to consider the following: Everytime when the fluorescence levels were measured for patient's stage effects, there are two sources of random variation at play, namely  
+
+* patient/subject random effects: measuring replicates of one patient is itself a source of variation that we attempt to capture in our model with this ``random effect`` term (as opposed to the ``fixed effect`` term, which would be the patient's stage effect in this experiment)  
+* (residual) random error: similar to the random error term that we encounter in the one-way anova model.  
+
+Specifically,  
+
+$$y_{ijk} = \mu + \beta_i + b_j + \epsilon_{ijk},$$  
+
+where  
+
+* $y_{ijk}$ denotes the $\log_2$ fluorescence level of a replicate,  
+* $\mu$ denotes the grand mean/intercept,
+* $\beta_i$ denotes the fixed effect term, ie. cancer stage, with $i$ indexing the patients' cancer stage,  
+* $b_j$ denotes the random effect term, ie. individual patient, with $j$ indexing the patients,  
+* $\epsilon_{ijk}$ denotes the (residual) random error of the model, with $k$ indexing the replicates. 
+
+This is the linear mixed-effects model, which we deploy using the R package ``lme4`` with the following (pseudo)-syntax  
+
+``lmer``$\left( y \sim \text{stage} + (1 \, | \, \text{patient}) \right)$.  
+
+The model estimates the two sources of variation: $\hat{\sigma}^2_b$ (due to the random-effect term) and $\hat{\sigma}^2_\epsilon$ (residual random error of the model). Ideally, when the replicates "largely agree with one another", most of the variation in the data should come from the random error term $\hat{\sigma}^2_\epsilon$ since the replicates' variance $\hat{\sigma}^2_b$ is minimal. Hence, we are interested in the estimated proportion of random-effect variance to total variance  
+
+$$\dfrac{\hat{\sigma}^2_b}{ \hat{\sigma}^2_b + \hat{\sigma}^2_\epsilon},$$  
+
+and ideally, we would like to see this ratio to be small. For each of the 177k peptides, we deploy this mixed-effect model, and plot the histogram of the estimated proportions of variances.  
+
+```{r, fig.height = 5}
+load("lmer_result.RData")
+
+# get estimated proportion of variances
+lmer_var_ratio <- lmer_result[,'variance_id'] / ( lmer_result[,'variance_id'] + lmer_result[,'variance_residual']  )
+hist(lmer_var_ratio, breaks = 100, xlab = "estimated proportion of variances",
+     main = "Histogram of peptide-level proportion of \nrandom-effect variance to total variance")
+```
+
+Ideally, we want the histogram to amass at values near zero but unfortunately, it appears that most of the estimated proportions of random-effect variance are rather high (near one). The little spike at zero estimated proportions is due to the `r sum(as.numeric(lmer_result[,'singularity']))` singular cases where the fitted random-effect variance $\hat{\sigma}^2_b$ is close/equal to zero. 
+
+
+
+
+
