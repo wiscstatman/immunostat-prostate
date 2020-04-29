@@ -73,7 +73,7 @@ First, we try to achieve Objective I. Unfortunately, due to the on-going pandemi
 
 These fastq files are fed into [MiXCR](https://mixcr.readthedocs.io/en/master/index.html) software -- "a universal framework that processes big immunome data from raw sequences to quantitated clonotypes". In particular, we rely on its built-in pipeline [*analyze amplicon*](https://mixcr.readthedocs.io/en/master/analyze.html) to align the raw reads, assemble the clonotypes and export human-readable reports and clonotype .txt spreadsheets. Currently, we use all the default parameters in the software but moving forward, we might want to investigate more on the default parameters in the [clonotype assembly step](https://mixcr.readthedocs.io/en/master/assemble.html). The reports and clonotype files are store in [Box](https://uwmadison.app.box.com/folder/111540216221).  
 
-In addition, we might want to consider other processing step after/in-conjunction-with MiXCR as suggested in this [paper](https://www.nature.com/articles/s41598-017-11310-0), in which the authors claimed that "MiXCR erroneously extracted many non-TCR reads. For example, somatically mutated immunoglobulin CDR3 regions may resemble those of TCR. Therefore, they performed additional filtering steps to exclude sequences transcribed from non-TCR loci".   
+In addition, we might want to consider other processing step after/in-conjunction-with MiXCR as suggested in this [paper](https://www.nature.com/articles/s41598-017-11310-0), in which the authors claimed that "MiXCR erroneously extracted many non-TCR reads. For example, somatically mutated immunoglobulin CDR3 regions may resemble those of TCR. Therefore, they performed additional filtering steps to exclude sequences transcribed from non-TCR loci". Michael has suggested that I check if the latest version of MiXCR has resolved these issues, and maybe we could also deploy MiXCR on any past published dataset to check against the corresponding published results, as a way to check performance of MiXCR.     
 
 We want to take a closer look at these clonotype files to explore clonality/diversity of TCR sequences for specific antigens. First, append these .txt spreadsheets into a single data frame for easier data wrangling. Here is a snippet of the combined data frame:   
 
@@ -254,7 +254,13 @@ However, most (`r paste0(round(length( which( !(NegCont$targetSequences %in%  da
 round(length( which( !(NegCont$targetSequences %in%  dat_ex_NegCont$targetSequences) ) )/ nrow(NegCont),4)
 ```
 
-Again, these are not based on counts of distinct/unique ``targetSequences``. Next, we verify that among these non-negative-control samples whose ``targetSequences`` also appear in those of negative controls, many of them have high clone counts (and high clone fractions) as tabulated below:
+Again, these are not based on counts of distinct/unique ``targetSequences``. To summarize these numbers in a very crudely-drawn Venn diagram, here it is:
+
+```{r, out.width = '65%', out.height='65%', fig.align="center"}
+knitr::include_graphics("VeryCrudeImage.png")
+```
+
+Next, we verify that among these non-negative-control samples whose ``targetSequences`` also appear in those of negative controls, many of them have high clone counts (and high clone fractions) as tabulated below:
 
 ```{r}
 # check clone fraction distribution among those non-negative samples with targetSequences that also appear in negative controls
