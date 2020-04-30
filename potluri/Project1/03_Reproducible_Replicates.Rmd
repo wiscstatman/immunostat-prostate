@@ -108,10 +108,12 @@ Next, we take $\log_2$ transformation of the fluorescence intensity.
 
 # Assess Reproducibility of Replicates
 
-Hemanth has assessed the issue of replicate reproducibility by looking at correlation coefficients between patients' fluorescence levels. Another approach is to consider the following: Everytime when the fluorescence levels were measured for patient's stage effects, there are two sources of random variation at play, namely  
+Hemanth has assessed the issue of replicate reproducibility by looking at correlation coefficients between patients' fluorescence levels. Another approach is to measure how much variation the technical replicates are contributing to the overall variation in the data. If the replicates are reproducible, ie. they "largely agree with one another", then the technical variation in the dataset should be minimal.  
 
-* patient/subject random effects: measuring replicates of one patient is itself a source of variation that we attempt to capture in our model with this ``random effect`` term (as opposed to the ``fixed effect`` term, which would be the patient's stage effect in this experiment)  
-* (residual) random error: similar to the random error term that we encounter in the one-way anova model.  
+Everytime when the fluorescence levels were measured (with replicates) for patient's stage effects, there are two sources of random variation at play, namely  
+
+* patient/subject random effect:  this reflects the biological variation of a patient (as opposed to the ``fixed effect`` term, which would be the cancer stage effect in this experiment)  
+* (residual) random error: measuring replicates of a patient is itself a source of technical variation.   
 
 Specifically,  
 
@@ -129,11 +131,11 @@ This is the linear mixed-effects model, which we deploy using the R package ``lm
 
 ``lmer``$\left( y \sim \text{stage} + (1 \, | \, \text{patient}) \right)$.  
 
-The model estimates the two sources of variation: $\hat{\sigma}^2_b$ (due to the random-effect term) and $\hat{\sigma}^2_\epsilon$ (residual random error of the model). Ideally, when the replicates "largely agree with one another", most of the variation in the data should come from the random error term $\hat{\sigma}^2_\epsilon$ since the replicates' variance $\hat{\sigma}^2_b$ is minimal. Hence, we are interested in the estimated proportion of random-effect variance to total variance  
+The model estimates the two sources of variation: $\hat{\sigma}^2_b$ (biological variation) and $\hat{\sigma}^2_\epsilon$ (technical variation). Ideally, when the replicates "largely agree with one another", biological variation should dominate technical variation since the replicates' variance $\hat{\sigma}^2_{\epsilon}$ is minimal. Hence, we are interested in the estimated proportion of random-effect variance to total variance  
 
 $$\dfrac{\hat{\sigma}^2_b}{ \hat{\sigma}^2_b + \hat{\sigma}^2_\epsilon},$$  
 
-and ideally, we would like to see this ratio to be small. For each of the 177k peptides, we deploy this mixed-effect model, and plot the histogram of the estimated proportions of variances.  
+and we would like to see this ratio to be close to one. For each of the 177k peptides, we deploy this mixed-effect model, and plot the histogram of the estimated proportions of variances.  
 
 ```{r, fig.height = 5}
 load("lmer_result.RData")
@@ -144,7 +146,7 @@ hist(lmer_var_ratio, breaks = 100, xlab = "estimated proportion of variances",
      main = "Histogram of peptide-level proportion of \nrandom-effect variance to total variance")
 ```
 
-Ideally, we want the histogram to amass at values near zero but unfortunately, it appears that most of the estimated proportions of random-effect variance are rather high (near one). The little spike at zero estimated proportions is due to the `r sum(as.numeric(lmer_result[,'singularity']))` singular cases where the fitted random-effect variance $\hat{\sigma}^2_b$ is close/equal to zero. 
+As expected, the histogram amasses at values near one, indicating that most of the variation in the ($\log_2$) fluorescence data is attributable to the biological variation of the patients and not the technical replicates themselves, which also suggests reproducibility of the replicates. The little spike at zero estimated proportions is due to the `r sum(as.numeric(lmer_result[,'singularity']))` singular cases where the fitted random-effect variance $\hat{\sigma}^2_b$ is close/equal to zero. 
 
 
 
