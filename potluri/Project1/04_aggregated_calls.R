@@ -3,6 +3,7 @@ library(lme4) # linear mixed effects model
 library(fdrtool)
 library(Rtsne)
 library(heatmap3)
+library(ggplot2)
 
 ####################################################################################### 
 #                           Some Common Variables and Functions                       #
@@ -460,6 +461,12 @@ hist(BH_FDR_tstat_pval, breaks= 50)
 # how many peptides with cancer patients significantly higher than normal subjects
 length(BH_FDR_tstat_pval[BH_FDR_tstat_pval <= 0.05])
 
+# output these probes and their t-stat p-val
+contr_df <- data.frame( peptide_id = anova_dat$PROBE_ID[BH_FDR_tstat_pval <= 0.05],
+                        difference = round((BH_FDR_cancer - BH_FDR_normal)[BH_FDR_tstat_pval <= 0.05],4),
+                        tstat_pvalues = round(BH_FDR_tstat_pval[BH_FDR_tstat_pval <= 0.05],4))
+contr_df <- contr_df[base::order(contr_df$tstat_pvalues),]
+
 # boxplot specs
 stage2 <- as.character(contr_stage)
 stage2[stage2 != "normal"] <- "cancer"
@@ -468,7 +475,7 @@ boxplot_col <- c("red", "blue")
 boxplot_func <- function(mat, col = boxplot_col, draw){
   # par(mar = c(2, 4.5, 2.3, 1),cex = 0.84)
   graphics::boxplot( as.numeric(mat[draw,]) ~ stage2, 
-                     col=col, horizontal=TRUE, las=1, xlab = "log2(fluorescence)", ylab = "subjects",
+                     col=col, horizontal=TRUE, las=1, xlab = "log2(fluorescence)", ylab = "groups",
                      main= paste(row.names(mat)[draw]) )
 }
 
