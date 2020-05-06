@@ -227,7 +227,25 @@ As expected, the histogram amasses at values near one, indicating that most of t
 
 # Tests on Binary Calls
 
-We acknowledge the consensus that the binary calls on a peptide of a patient could be conservative -- out of 177,604 peptides, only `r nrow(calls)` of them have at least one call among all patients. For each of these `r nrow(calls)` peptides, we run a logistic regression based on these binary calls of the patients in order **to determine if calls are significantly different among patients of different cancer stages**.  
+We acknowledge the consensus that the binary calls on a peptide of a patient could be conservative -- out of 177,604 peptides, only `r nrow(calls)` of them have at least one call among all patients. Most of the peptides have very few positive calls among all patients. We plot the distribution of the sum of calls among all patients for each peptide.
+
+```{r, fig.height = 4}
+# see row sums of calls
+calls_rowsums <- calls %>% select(any_of(patient_key$id)) %>% rowSums()
+calls_rowsums_df <- as.data.frame(table(calls_rowsums)) %>%
+  mutate(Freq = ifelse(as.numeric(calls_rowsums) >=10, sum(Freq[as.numeric(calls_rowsums) >=10]), Freq))  %>%
+  filter(as.numeric(calls_rowsums) <=10) %>%
+  mutate(calls_rowsums = ifelse(as.numeric(calls_rowsums) == 10 , "10 and above", calls_rowsums),
+         calls_rowsums = factor(calls_rowsums, levels = c(1:9,"10 and above")))
+ggplot(data=calls_rowsums_df, aes(x=calls_rowsums, y=Freq)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  geom_text(aes(label=paste0(Freq)), vjust=-.3, size=3)+
+  labs(x = "Sum of calls among all patients for a peptide",
+       title = paste0("Sum of Calls Among All Patients for Each Peptide (Total ", nrow(calls), " Peptides)")) +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+For each of these `r nrow(calls)` peptides, we run a logistic regression based on these binary calls of the patients in order **to determine if calls are significantly different among patients of different cancer stages**.  
 
 Specifically, for each of these `r nrow(calls)` peptides, we fit the following model:
 
@@ -512,7 +530,11 @@ kable( count.func(all_anova$anova_qval, seq(0.01, 0.1, by = 0.01)),
 
 ## Visualizing Results
 
-It appears that we have identify `r length(all_anova$anova_BH[all_anova$anova_BH <= 0.05])` significant peptides at 5\% BH FDR. Now, plot the resulting PCA, t-SNE and heatmap of the residual $\log_2$ fluorescence of these peptides.
+```{r}
+names(calls_rowsums) <- calls$PROBE_ID
+```
+
+It appears that we have identify `r length(all_anova$anova_BH[all_anova$anova_BH <= 0.05])` significant peptides at 5\% BH FDR. Out of these `r length(all_anova$anova_BH[all_anova$anova_BH <= 0.05])` significant peptides, `r sum(as.numeric(names(all_anova$anova_BH[all_anova$anova_BH<=0.05]) %in% names(calls_rowsums[calls_rowsums >=1])))` of them (or `r round( sum(as.numeric(names(all_anova$anova_BH[all_anova$anova_BH<=0.05]) %in% names(calls_rowsums[calls_rowsums >=1]))) / length(all_anova$anova_BH[all_anova$anova_BH <= 0.05]) * 100 ,4)` \% of them) also have at least one call among all patients. Now, plot the resulting PCA, t-SNE and heatmap of the residual $\log_2$ fluorescence of these peptides.
 
 ```{r}
 # all_anova

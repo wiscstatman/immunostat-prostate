@@ -152,8 +152,20 @@ calls <- calls %>% select(container:PROBE_ID, any_of(patient_key$id))
 # remove peptides that have zero calls in ALL subjects
 calls <- calls[ apply( calls %>% select(any_of(patient_key$id)) , 1, function(x){ !all(x==0) } ) , ]
 
-# check
-calls %>% select(any_of(patient_key$id)) %>% rowSums() %>% summary()
+# see row sums of calls
+calls_rowsums <- calls %>% select(any_of(patient_key$id)) %>% rowSums()
+calls_rowsums_df <- as.data.frame(table(calls_rowsums)) %>%
+  mutate(Freq = ifelse(as.numeric(calls_rowsums) >=10, sum(Freq[as.numeric(calls_rowsums) >=10]), Freq))  %>%
+  filter(as.numeric(calls_rowsums) <=10) %>%
+  mutate(calls_rowsums = ifelse(as.numeric(calls_rowsums) == 10 , "10 and above", calls_rowsums),
+         calls_rowsums = factor(calls_rowsums, levels = c(1:9,"10 and above")))
+ggplot(data=calls_rowsums_df, aes(x=calls_rowsums, y=Freq)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  geom_text(aes(label=paste0(Freq)), vjust=-.3, size=3.5)+
+  labs(x = "Sum of calls among all patients for a peptide",
+       title = paste0("Sum of Calls Among All Patients for Each Peptide (Total ", nrow(calls), " Peptides)")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
 
 # in the end, how many peptides with at least one call among all patients
 nrow(calls)
@@ -329,6 +341,11 @@ count.func(all_anova$anova_BH, seq(0.01, 0.1, by = 0.01))
 count.func(all_anova$anova_qval, seq(0.01, 0.1, by = 0.01))
 count.func(calls_anova$anova_BH, seq(0.01, 0.1, by = 0.01))
 count.func(calls_anova$anova_qval, seq(0.01, 0.1, by = 0.01))
+
+# comparing with calls
+names(calls_rowsums) <- calls$PROBE_ID
+sum(as.numeric(names(calls_anova$anova_BH[calls_anova$anova_BH<=0.05]) %in% names(calls_rowsums[calls_rowsums >=3])))
+sum(as.numeric(names(all_anova$anova_BH[all_anova$anova_BH<=0.05]) %in% names(calls_rowsums[calls_rowsums >=3])))
 
 ####################################################################################### 
 #                                ANOVA Visualization                                  #
