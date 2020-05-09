@@ -1,9 +1,11 @@
-library(tidyverse) # make sure you have the latest tidyverse !
+# library(AnnotationDbi) # intraIDMapper: map uniprot id to gene entrez id
+library(allez)
 library(lme4) # linear mixed effects model
 library(fdrtool)
 library(Rtsne)
 library(heatmap3)
 library(ggplot2)
+library(tidyverse) # make sure you have the latest tidyverse !
 
 ####################################################################################### 
 #                           Some Common Variables and Functions                       #
@@ -59,6 +61,15 @@ anova_func <- function(anova_pval){
   
   return(list(anova_BH = anova_BH, anova_qval = anova_qval, anova_qval_eta0 = anova_qval_eta0))
 }
+
+
+# commonly-used ggplot theme 
+myTheme <- theme(panel.background = element_rect(fill = "grey90"),
+                 panel.grid.major = element_line(color = "white"),
+                 panel.grid.minor = element_line(color = "white"),
+                 axis.text.x = element_text(angle = 90, hjust = 1),
+                 legend.position = "bottom",
+                 plot.title = element_text(hjust = 0.5))
 
 
 load("04_aggregated_calls.RData")
@@ -134,56 +145,6 @@ array_id_key %>%
   tally()
 
 #-----------------------------------------------------------------------------------------------
-# read calls data
-
-# read aggregated calls data
-calls = read_csv("aggregated_calls_full_nmcspc.csv") 
-length(unique(calls$probe_sequence)) == nrow(calls) # probe_sequence NOT unique
-
-# probe_sequence NOT unique
-# need to generate unique PROBE_ID
-# PROBE_ID in raw_data_complete.csv is paste0(SEQ_ID, ";", POSITION)
-calls$PROBE_ID = paste0(calls$seq_id, ";", calls$position)
-calls <- calls %>% select(container:position, PROBE_ID, everything()) # rearrange columns
-
-# keep only patients that appear in patient_sample_key
-calls <- calls %>% select(container:PROBE_ID, any_of(patient_key$id))
-
-# remove peptides that have zero calls in ALL subjects
-calls <- calls[ apply( calls %>% select(any_of(patient_key$id)) , 1, function(x){ !all(x==0) } ) , ]
-
-# see row sums of calls
-calls_rowsums <- calls %>% select(any_of(patient_key$id)) %>% rowSums()
-calls_rowsums_df <- as.data.frame(table(calls_rowsums)) %>%
-  mutate(Freq = ifelse(as.numeric(calls_rowsums) >=10, sum(Freq[as.numeric(calls_rowsums) >=10]), Freq))  %>%
-  filter(as.numeric(calls_rowsums) <=10) %>%
-  mutate(calls_rowsums = ifelse(as.numeric(calls_rowsums) == 10 , "10 and above", calls_rowsums),
-         calls_rowsums = factor(calls_rowsums, levels = c(1:9,"10 and above")))
-ggplot(data=calls_rowsums_df, aes(x=calls_rowsums, y=Freq)) +
-  geom_bar(stat="identity", fill="steelblue")+
-  geom_text(aes(label=paste0(Freq)), vjust=-.3, size=3.5)+
-  labs(x = "Sum of calls among all patients for a peptide",
-       title = paste0("Sum of Calls Among All Patients for Each Peptide (Total ", nrow(calls), " Peptides)")) +
-  theme(plot.title = element_text(hjust = 0.5))
-
-
-# in the end, how many peptides with at least one call among all patients
-nrow(calls)
-
-# plots for calls 
-# call_counts_by_peptide <- t(apply( calls %>% select(any_of(sample_key$id)), 1, function(x){
-#   tapply(x, sample_key$stage, FUN=sum)
-# }))
-# colnames(call_counts_by_peptide) <- levels(sample_key$stage)
-# call_counts_by_peptide <- as.data.frame(call_counts_by_peptide)
-# hist(call_counts_by_peptide$normal)
-# hist(call_counts_by_peptide$new_dx)
-# hist(call_counts_by_peptide$nmCSPC)
-# hist(call_counts_by_peptide$nmCRPC)
-# hist(call_counts_by_peptide$mCRPC)
-## a lot of zeroes anyway...
-
-#-----------------------------------------------------------------------------------------------
 # get raw_data_complete.csv and compute median    
 
 raw_data = read_csv("raw_data_complete.csv")
@@ -229,6 +190,156 @@ colnames(raw_data_median)[1:15] # check
 
 # write.table(raw_data_median, file = "raw_data_median.csv", sep = ",", row.names = F)
 
+
+#-----------------------------------------------------------------------------------------------
+# read calls data
+
+# read aggregated calls data
+calls = read_csv("aggregated_calls_full_nmcspc.csv") 
+length(unique(calls$probe_sequence)) == nrow(calls) # probe_sequence NOT unique
+
+# probe_sequence NOT unique
+# need to generate unique PROBE_ID
+# PROBE_ID in raw_data_complete.csv is paste0(SEQ_ID, ";", POSITION)
+calls$PROBE_ID = paste0(calls$seq_id, ";", calls$position)
+calls <- calls %>% select(container:position, PROBE_ID, everything()) # rearrange columns
+
+# keep only patients that appear in patient_sample_key
+calls <- calls %>% select(container:PROBE_ID, any_of(patient_key$id))
+
+
+# check dimensions of calls match dimensions of raw_data_median
+(nrow(calls) == nrow(raw_data_median)) & 
+  (ncol(calls %>% select(any_of(patient_key$id))) == ncol(raw_data_median %>% select(any_of(patient_key$id))))
+ncol(calls %>% select(any_of(patient_key$id))) == nrow(patient_key)
+
+# check if PROBE_ID (& patient_id) in calls appear in PROBE_ID (& patient_id) in raw_data_median
+sum(as.numeric( calls$PROBE_ID %in% raw_data_median$PROBE_ID )) == nrow(calls)
+sum(as.numeric( colnames( calls %>% select(any_of(patient_key$id)) ) %in% 
+                  colnames( raw_data_median %>% select(any_of(patient_key$id)) ) )) == nrow(patient_key)
+
+# get median_long & calls_long
+median_long2 <- raw_data_median %>%
+  select(PROBE_ID, any_of(array_id_key$id)) 
+calls_long <- calls %>%
+  select(PROBE_ID, any_of(array_id_key$id)) 
+dim(median_long2) == dim(calls_long) # check
+
+# rearrange rows and columns to match calls_long & median_long
+calls_long <- calls_long[, match(colnames(median_long2), colnames(calls_long))]
+calls_long <- calls_long[ match(median_long2$PROBE_ID, calls_long$PROBE_ID) , ]
+sum(as.numeric( colnames( calls_long ) == colnames( median_long2 ) )) == nrow(patient_key) + 1 # check
+sum(as.numeric( calls_long$PROBE_ID ==  median_long2$PROBE_ID  )) == nrow(median_long2) # check
+
+# pivot_longer
+median_long2 <- median_long2 %>% select(-PROBE_ID) %>%
+  pivot_longer(cols = everything(), names_to = "id", values_to = "fluorescence") 
+calls_long <- calls_long %>% select(-PROBE_ID) %>%
+  pivot_longer(cols = everything(), names_to = "id", values_to = "calls") 
+
+# check median_long2 & calls_long
+nrow(median_long2) == nrow(raw_data_median) * nrow(patient_key)
+head(median_long2)
+nrow(calls_long) == nrow(calls) * nrow(patient_key)
+head(calls_long)
+dim(median_long2) == dim(median_long2)
+sum(as.numeric(median_long2$id == calls_long$id)) == nrow(raw_data_median) * nrow(patient_key)
+
+# plot fluorescence of calls vs no-calls
+calls_fl_df <- data.frame(
+  calls = factor(calls_long$calls),
+  fluorescence = median_long2$fluorescence
+)
+janitor::tabyl(calls_fl_df$calls) %>% janitor::adorn_pct_formatting() %>%
+  rename(calls = "calls_fl_df$calls", patient_peptide_counts = n)
+ggplot(calls_fl_df, aes(x = calls, y = fluorescence, fill = calls)) +
+  geom_boxplot() +
+  labs(title = "Boxplots of Fluorescence Levels per Peptide per Patient", 
+       x = "Calls per peptide per patient", y = "Median (across replicates) Fluorescence Levels on log2 scale") +
+  theme(panel.background = element_rect(fill = "grey90"),
+        panel.grid.major = element_line(color = "white"),
+        panel.grid.minor = element_line(color = "white"),
+        plot.title = element_text(hjust = 0.5))
+
+# check calls_long
+nrow(calls_long) == nrow(calls) * nrow(patient_key)
+head(calls_long)
+
+# boxplots to check fluorescence of positive calls vs fluorescence of zero calls
+calls_median_df <- inner_join(calls_long, median_long, by = "id")
+
+# free up memory
+rm(median_long2, calls_fl_df,  calls_long); gc()
+
+
+# remove peptides that have zero calls in ALL subjects
+calls <- calls[ apply( calls %>% select(any_of(patient_key$id)) , 1, function(x){ !all(x==0) } ) , ]
+
+# see row sums of calls
+calls_rowsums <- calls %>% select(any_of(patient_key$id)) %>% rowSums()
+calls_rowsums_df <- as.data.frame(table(calls_rowsums)) %>%
+  mutate(Freq = ifelse(as.numeric(calls_rowsums) >=10, sum(Freq[as.numeric(calls_rowsums) >=10]), Freq))  %>%
+  filter(as.numeric(calls_rowsums) <=10) %>%
+  mutate(calls_rowsums = ifelse(as.numeric(calls_rowsums) == 10 , "10 and above", calls_rowsums),
+         calls_rowsums = factor(calls_rowsums, levels = c(1:9,"10 and above")))
+ggplot(data=calls_rowsums_df, aes(x=calls_rowsums, y=Freq)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  geom_text(aes(label=paste0(Freq)), vjust=-.3, size=3.5)+
+  labs(x = "Sum of calls among all patients for a peptide",
+       title = paste0("Sum of Calls Among All Patients for Each Peptide (Total ", nrow(calls), " Peptides)")) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+# in the end, how many peptides with at least one call among all patients
+nrow(calls)
+
+# plots for calls 
+# call_counts_by_peptide <- t(apply( calls %>% select(any_of(sample_key$id)), 1, function(x){
+#   tapply(x, sample_key$stage, FUN=sum)
+# }))
+# colnames(call_counts_by_peptide) <- levels(sample_key$stage)
+# call_counts_by_peptide <- as.data.frame(call_counts_by_peptide)
+# hist(call_counts_by_peptide$normal)
+# hist(call_counts_by_peptide$new_dx)
+# hist(call_counts_by_peptide$nmCSPC)
+# hist(call_counts_by_peptide$nmCRPC)
+# hist(call_counts_by_peptide$mCRPC)
+## a lot of zeroes anyway...
+
+
+####################################################################################### 
+#                         Check normalization of fluorescence data                    #         
+#######################################################################################
+
+median_long <- raw_data_median %>%
+  select(any_of(array_id_key$id)) %>%
+  pivot_longer(cols = everything(), names_to = "id", values_to = "fluorescence") 
+
+# check
+nrow(median_long) == nrow(raw_data_median) * nrow(patient_key)
+head(median_long)
+
+# set fill color
+median_long$stage <- patient_key$stage[ match(median_long$id, patient_key$id) ]
+# median_long$cols <- pal[ match(median_long$stage, names(pal)) ]
+
+# sort order of patients in boxplot
+median_long$id <- factor(median_long$id, levels = c(
+  patient_key$id[patient_key$stage == "normal"],
+  patient_key$id[patient_key$stage == "new_dx"],
+  patient_key$id[patient_key$stage == "nmCSPC"],
+  patient_key$id[patient_key$stage == "nmCRPC"],
+  patient_key$id[patient_key$stage == "mCRPC"]
+))
+
+ggplot(median_long, aes(x = id, y = fluorescence, fill = stage)) +
+  geom_boxplot() +
+  # scale_fill_discrete(name="Stage") +
+  # guides(fill=guide_legend(title="Stage")) +
+  scale_fill_manual(name = "Stage", values = pal) +
+  labs(title = "Boxplots of Peptide Fluorescence Levels for All Patients", 
+       x = "Patient ID", y = "Median Fluorescence Levels on log2 scale") +
+  myTheme
 
 ####################################################################################### 
 #      Evaluate Reproducibility of Replicates via Linear Mixed Effects Model          #         
@@ -330,11 +441,11 @@ for(i in 1:nrow(raw_data_median)){
 }
 
 # get ANOVA p-values for only peptides with at least one non-zero call among all patients
-calls_anova_pval <- all_anova_pval[names(all_anova_pval) %in% calls$PROBE_ID]
+# calls_anova_pval <- all_anova_pval[names(all_anova_pval) %in% calls$PROBE_ID] # filter then FDR control
 
 # get p-values histogram and FDR 
 all_anova <- anova_func(all_anova_pval)
-calls_anova <- anova_func(calls_anova_pval)
+# calls_anova <- anova_func(calls_anova_pval) # filter then FDR control
 
 # peptide counts at various FDR thresholds
 count.func(all_anova$anova_BH, seq(0.01, 0.1, by = 0.01))
@@ -360,13 +471,20 @@ anova_dat <- raw_data_median %>%
   filter(anova_BH <= BH_FDR_cutoff) %>%
   select(-anova_BH)
 
-# calls_anova
-anova_dat <- raw_data_median %>%
-  filter((PROBE_ID %in% calls$PROBE_ID)) %>%
-  select(PROBE_ID, any_of(patient_key$id)) 
-anova_dat <- anova_dat %>%
-  mutate(anova_BH = calls_anova$anova_BH[anova_dat$PROBE_ID]) %>%
+# calls_anova (filter then FDR control)
+# anova_dat <- raw_data_median %>%
+#   filter((PROBE_ID %in% calls$PROBE_ID)) %>%
+#   select(PROBE_ID, any_of(patient_key$id)) 
+# anova_dat <- anova_dat %>%
+#   mutate(anova_BH = calls_anova$anova_BH[anova_dat$PROBE_ID]) %>%
+#   filter(anova_BH <= BH_FDR_cutoff) %>%
+#   select(-anova_BH)
+
+anova_dat <- raw_data_median %>% 
+  select(PROBE_ID, any_of(patient_key$id)) %>% 
+  mutate(anova_BH = all_anova$anova_BH[raw_data_median$PROBE_ID]) %>%
   filter(anova_BH <= BH_FDR_cutoff) %>%
+  filter(PROBE_ID %in% calls$PROBE_ID) %>%
   select(-anova_BH)
 
 
@@ -509,82 +627,58 @@ boxplot_func(mat = boxplot_mat, draw = 3)
 boxplot_func(mat = boxplot_mat, draw = 4)
 boxplot_func(mat = boxplot_mat, draw = 5)
 
+# when anova_dat is based on filtered calls
+calls[calls$PROBE_ID %in% anova_dat$PROBE_ID[BH_FDR_tstat_pval <= 0.05], ] %>%
+  select(any_of(patient_key$id)) %>% 
+  colSums() %>% enframe(name = "id", value = "sum_of_calls") %>%
+  inner_join(patient_key) %>%
+  group_by(stage) %>% 
+  summarize( n = n(),
+             total_calls = sum(sum_of_calls) )
 
 ####################################################################################### 
 #                                   Gene Set Analysis                                 #
 #######################################################################################
 
-library(AnnotationDbi) # intraIDMapper: map uniprot id to gene entrez id
-library(allez)
+# read uniprot_gene csv
+uniprot_gene <- read_csv("uniprot_data_entrez.csv", col_types = cols_only(
+  seq_id = col_character(),
+  uniprot_id = col_character(),
+  gene_symbol = col_character(),
+  entrez_gene_id_pete = col_double(),
+  gene_names = col_character(),
+  protein_names = col_character()
+)) %>% filter(!(is.na(seq_id)) & !(is.na(entrez_gene_id_pete))) %>%
+  select(seq_id, uniprot_id, gene_symbol, entrez_gene_id_pete, gene_names, protein_names)
 
-# read uniprot csv
-uniprot_data = read_csv("complete_uniprot_data.csv", 
-                        col_types = cols( 
-                          seq_id = col_character(),
-                          uniprot_id = col_character(),
-                          status = col_character(),
-                          protein_names = col_character(),
-                          gene_names = col_character(),
-                          length = col_double(),
-                          yourlist_m201912135c475328cef75220c360d524e9d456ce648e46h = col_character(),
-                          function_cc = col_character(),
-                          subcellular_location_cc = col_character(),
-                          tissue_specificity = col_character(),
-                          involvement_in_disease = col_character(),
-                          doug_name = col_character(),
-                          query = col_character())
-)
-uniprot_data  <- uniprot_data %>% select(seq_id : query)
+# check if seq_id & entrez_id unique
+length(unique(uniprot_gene$seq_id)) == length(uniprot_gene$seq_id) # yes! unique!
+length(unique(uniprot_gene$entrez_gene_id_pete)) == length(uniprot_gene$entrez_gene_id_pete) # NOT unique
 
-# get 5% BH-FDR sequence
-BH_seq_id <- unique(raw_data_median$SEQ_ID[anova_BH <= BH_FDR_cutoff])
+uniprot_gene[ uniprot_gene$entrez_gene_id_pete %in%
+               (uniprot_gene %>%
+                  group_by(entrez_gene_id_pete) %>% 
+                  tally() %>%
+                  filter(n > 1) %>%
+                  pull(entrez_gene_id_pete)) ,]
 
-# get zero-one binary vector indicating whether protein sequence makes the BH-FDR cutoff
-seq_id_ok <- as.numeric(all_seq_id %in% BH_seq_id)
-length(seq_id_ok) == length(all_seq_id) # check, nice
 
-# get all uniprot id based on protein seq id
-all_seq_uniprot <- uniprot_data$uniprot_id[ match(all_seq_id, uniprot_data$seq_id) ]
-sum(as.numeric(is.na(all_seq_uniprot))) == 0 # check, has some NA's
+## manually changing entrez_gene_id for PCA10 & PRO29
+uniprot_gene$entrez_gene_id_pete[uniprot_gene$seq_id == "PCA10"] <- 28912
+uniprot_gene$entrez_gene_id_pete[uniprot_gene$seq_id == "PRO29"] <- NA
+uniprot_gene <- uniprot_gene[!(is.na(uniprot_gene$entrez_gene_id_pete)),]
 
-# trim away those NA's
-seq_id_ok <- seq_id_ok[!(is.na(all_seq_uniprot))]
-all_seq_uniprot <- all_seq_uniprot[!(is.na(all_seq_uniprot))]
-length(unique(all_seq_uniprot)) == length(all_seq_uniprot) # NOT nice, there are repeats
+# CAREFUL!
+# further filter uniprot_gene to limit them to proteins associated with filtered peptides based on calls
+# uniprot_gene  <- uniprot_gene[ uniprot_gene$seq_id %in% (unique(calls$seq_id)) ,]
 
-# collapse those repeats
-seq_id_ok_df <- data.frame(
-  all_seq_uniprot,
-  seq_id_ok
-) 
-seq_id_ok_df <- seq_id_ok_df %>%
-  group_by(all_seq_uniprot) %>%
-  summarise(ok2 = min(1, sum(seq_id_ok))) 
-nrow(seq_id_ok_df) == length(unique(all_seq_uniprot)) # check, ok
-table(seq_id_ok_df$ok2) # check, ok
-all_seq_uniprot <- as.character(seq_id_ok_df$all_seq_uniprot)
-length(all_seq_uniprot) == length(unique(all_seq_uniprot)) # all uniprot ids now unique and NO NA's
-seq_id_ok <- seq_id_ok_df$ok2
+# get unique seq_id that are associated with significant peptides
+signif_seq_id <- unique( raw_data_median$SEQ_ID[raw_data_median$PROBE_ID %in% anova_dat$PROBE_ID] )
+signif_seq_id <- signif_seq_id[!(is.na(signif_seq_id))] # just in case
 
-# use bioconductor to match uniprot id to gene entrez id
-all_seq_entrez <- AnnotationDbi::intraIDMapper(ids = all_seq_uniprot, species = 'HOMSA')
-sum(as.numeric(is.na(all_seq_entrez))) == 0 # check, nice no NA's
-
-# mappings got problem with the following checks
-length(all_seq_entrez) == length(all_seq_uniprot) # NOT nice, has multiple matches
-length(unique(all_seq_entrez)) == length(all_seq_entrez) # this is ok
-sum(as.numeric( names(all_seq_entrez) %in% all_seq_uniprot )) == length(all_seq_entrez) # at least this is ok
-data.frame(uniprot = names(all_seq_entrez)) %>% group_by(uniprot) %>% tally() %>% filter(n > 1)
-# some uniprot ids are matched to multiple entrez ids, some not matched at all
-
-# update binary vector to match entrez id
-entrez_df <- data.frame(
-  entrez = unname(all_seq_entrez),
-  all_seq_uniprot = names(all_seq_entrez)
-) %>% inner_join(seq_id_ok_df)
-table(entrez_df$ok2) # check, ok
-seq_id_ok <- entrez_df$ok2
-names(seq_id_ok) <- entrez_df$entrez
+# convert these into binary vector
+seq_id_ok <- as.numeric(uniprot_gene$seq_id %in% signif_seq_id)
+names(seq_id_ok) <- uniprot_gene$entrez_gene_id_pete
 
 # gene-set analysis via allez!
 allez.go <- allez(seq_id_ok, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
@@ -602,7 +696,22 @@ allezTable(allez.kegg, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.al
 allezPlot(allez.go, n.cell = min.num.gene, nominal.alpha = nom.alpha)
 allezPlot(allez.kegg, n.cell = min.num.gene, nominal.alpha = nom.alpha)
 
-
+# tabulate enriched gene-set with signif genes only
+allez.tab <- allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha)
+rich.vec <- NULL
+rich.count.vec <- NULL
+for (i in 1 : dim(allez.tab)[1])
+{
+  check.string <- strsplit(allez.tab[i,6], split = ";")[[1]]
+  ori.count <- length(check.string)
+  rich.ok <- check.string %in% (uniprot_gene$gene_names)[match(signif_seq_id, uniprot_gene$seq_id)]
+  rich.count <- length(rich.ok[rich.ok])
+  rich.vec <- c( rich.vec, paste(check.string[rich.ok],collapse="; ") )
+  rich.count.vec <- c( rich.count.vec, paste(rich.count,"/",ori.count, sep = "") )
+}
+allez.tab2 <- cbind(allez.tab[,1:3], rich.count.vec, allez.tab[,5], rich.vec)
+allez.tab2[,5] <- round( as.numeric(allez.tab2[,5]), 4)
+colnames(allez.tab2) <- colnames(allez.tab)
 
 
 # save results

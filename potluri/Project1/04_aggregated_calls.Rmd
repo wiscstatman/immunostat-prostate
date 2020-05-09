@@ -30,13 +30,14 @@ This project aims to characterize antibody responses to a wide variety of protei
 Each patient’s serum was assayed in a number of replicates, ``rep``, which were 1, 2, or 3, for peptide-specific IgG responses using the microarray. We remove patients with ``rep`` = 1. The criterion for a positive call on a peptide for a patient was that they had to meet the signal (fluorescence level) threshold in at least two of the technical replicates. Since this is not possible for patients without technical replicates, we exclude them for consistency.
 
 ```{r}
+library(allez)
 library(kableExtra)
 library(ggplot2)
-library(tidyverse) # make sure you have the latest tidyverse !
 library(lme4) # linear mixed effects model
 library(fdrtool)
 library(Rtsne)
 library(heatmap3)
+library(tidyverse) # make sure you have the latest tidyverse !
 
 ####################################################################################### 
 #                           Some Common Variables and Functions                       #
@@ -92,6 +93,15 @@ anova_func <- function(anova_pval){
   
   return(list(anova_BH = anova_BH, anova_qval = anova_qval, anova_qval_eta0 = anova_qval_eta0))
 }
+
+
+# commonly-used ggplot theme 
+myTheme <- theme(panel.background = element_rect(fill = "grey90"),
+                 panel.grid.major = element_line(color = "white"),
+                 panel.grid.minor = element_line(color = "white"),
+                 axis.text.x = element_text(angle = 90, hjust = 1, size = 4.5),
+                 legend.position = "bottom",
+                 plot.title = element_text(hjust = 0.5))
 
 
 load("04_aggregated_calls.RData")
@@ -154,7 +164,7 @@ patient_key$stage <- relevel(patient_key$stage, ref = "normal")
 
 Note that these `r array_id_key %>% group_by(id, stage) %>% summarize() %>% group_by(stage) %>% tally() %>% pull(n) %>% sum()` patient-records do not represent distinct patients, as certain patients were measured at two different stages of prostate cancer. There are `r length(ids_to_remove)` patients who had replicates for both stages. We removed their earlier-stage records, and finally arrive at `r nrow(patient_key)` distinct patients. 
 
-```{r, fig.height = 3.3}
+```{r, fig.height = 2.6}
 distinct_patients_with_reps <- array_id_key %>%
   group_by(id, stage) %>%
   summarize() %>%
@@ -163,11 +173,46 @@ distinct_patients_with_reps <- array_id_key %>%
 
 ggplot(data=distinct_patients_with_reps, aes(x=stage, y=n)) + 
   geom_bar(stat="identity", width=0.5 , fill="steelblue") + 
-  geom_text(aes(label=n), vjust=-0.3, size=3) +
+  geom_text(aes(label=n), vjust=-0.3, size=2.5) +
   theme_minimal()
 ```
 
-We will utilize both fluorescence levels data and patients' binary calls data to **investigate if patients at different stages of prostate cancer exhibit different antibody responses to certain peptide chains or proteins**. We take $\log_2$ transformation on the fluorescence levels prior to subsequent steps in our analysis. 
+We will utilize both fluorescence levels data and patients' binary calls data to **investigate if patients at different stages of prostate cancer exhibit different antibody responses to certain peptide chains or proteins**. We take $\log_2$ transformation on the fluorescence levels prior to subsequent steps in our analysis. In order to verify normalization of the fluorescence level, we also plot the boxplots of median (across replicates) $\log_2$ fluorescence level of all peptides for each patient.
+
+```{r, fig.height = 5, cache = T, dependson=c("myTheme", "raw_data_median", "patient_key", "array_id_key")}
+####################################################################################### 
+#                         Check normalization of fluorescence data                    #         
+#######################################################################################
+
+median_long <- raw_data_median %>%
+  select(any_of(array_id_key$id)) %>%
+  pivot_longer(cols = everything(), names_to = "id", values_to = "fluorescence") 
+
+# set fill color
+median_long$stage <- patient_key$stage[ match(median_long$id, patient_key$id) ]
+# median_long$cols <- pal[ match(median_long$stage, names(pal)) ]
+
+# sort order of patients in boxplot
+median_long$id <- factor(median_long$id, levels = c(
+  patient_key$id[patient_key$stage == "normal"],
+  patient_key$id[patient_key$stage == "new_dx"],
+  patient_key$id[patient_key$stage == "nmCSPC"],
+  patient_key$id[patient_key$stage == "nmCRPC"],
+  patient_key$id[patient_key$stage == "mCRPC"]
+))
+
+ggplot(median_long, aes(x = id, y = fluorescence, fill = stage)) +
+  geom_boxplot() +
+  # scale_fill_discrete(name="Stage") +
+  # guides(fill=guide_legend(title="Stage")) +
+  scale_fill_manual(name = "Stage", values = pal) +
+  labs(title = "Boxplots of Peptide Fluorescence Levels for All Patients", 
+       x = "Patient ID", y = "Median Fluorescence Levels on log2 scale") +
+  ylim(2,16) +
+  myTheme
+```
+
+It appears that the fluorescence levels of the peptides are normalized. 
 
 ```{r}
 # read calls data
@@ -183,6 +228,10 @@ calls <- calls %>% select(container:position, PROBE_ID, everything()) # rearrang
 
 # keep only patients that appear in patient_sample_key
 calls <- calls %>% select(container:PROBE_ID, any_of(patient_key$id))
+
+# need calls_long for later 
+calls_long <- calls %>%
+  select(PROBE_ID, any_of(array_id_key$id)) 
 
 # remove peptides that have zero calls in ALL subjects
 calls <- calls[ apply( calls %>% select(any_of(patient_key$id)) , 1, function(x){ !all(x==0) } ) , ]
@@ -227,9 +276,51 @@ As expected, the histogram amasses at values near one, indicating that most of t
 
 # Tests on Binary Calls
 
-We acknowledge the consensus that the binary calls on a peptide of a patient could be conservative -- out of 177,604 peptides, only `r nrow(calls)` of them have at least one call among all patients. Most of the peptides have very few positive calls among all patients. We plot the distribution of the sum of calls among all patients for each peptide.
+We acknowledge the consensus that the binary calls on a peptide of a patient could be conservative -- out of 177,604 peptides, only `r nrow(calls)` of them have at least one call among all patients. If we collapse all patients' peptides to quantify the number of zero- and one- calls, we obtain the following counts:
 
-```{r, fig.height = 4}
+```{r, cache = T, dependson= c("raw_data_median", "array_id_key", "calls_long")}
+# get median_long 
+median_long2 <- raw_data_median %>%
+  select(PROBE_ID, any_of(array_id_key$id)) 
+
+# rearrange rows and columns to match calls_long & median_long
+calls_long <- calls_long[, match(colnames(median_long2), colnames(calls_long))]
+calls_long <- calls_long[ match(median_long2$PROBE_ID, calls_long$PROBE_ID) , ]
+
+# pivot_longer
+median_long2 <- median_long2 %>% select(-PROBE_ID) %>%
+  pivot_longer(cols = everything(), names_to = "id", values_to = "fluorescence") 
+calls_long <- calls_long %>% select(-PROBE_ID) %>%
+  pivot_longer(cols = everything(), names_to = "id", values_to = "calls") 
+
+# get the data frame for ggplot
+calls_fl_df <- data.frame(
+  calls = factor(calls_long$calls),
+  fluorescence = median_long2$fluorescence
+)
+
+kable(janitor::tabyl(calls_fl_df$calls) %>% janitor::adorn_pct_formatting() %>%
+  rename(calls = "calls_fl_df$calls", patient_peptide_counts = n),
+       format = "latex", row.names= F, booktabs = T ) %>%
+  kable_styling(latex_options = c("hold_position"))
+```
+
+To verify that positive calls are associated with stronger signals (remember that ``call`` = 1 if fluorescence levels meet a certain signal threshold in at least two of the replicates), we plot the boxplot of $\log_2$ fluorescence levels for all peptides across all patients, comparing between those that are associated with positive calls and those with zero-calls. 
+
+```{r, fig.height = 3.5, cache = T, dependson=c("calls_fl_df")}
+ggplot(calls_fl_df, aes(x = calls, y = fluorescence, fill = calls)) +
+  geom_boxplot() +
+  labs(title = "Boxplots of Fluorescence Levels per Peptide per Patient", 
+       x = "Calls per peptide per patient", y = "Median Fluorescence Levels") +
+  theme(panel.background = element_rect(fill = "grey90"),
+        panel.grid.major = element_line(color = "white"),
+        panel.grid.minor = element_line(color = "white"),
+        plot.title = element_text(hjust = 0.5))
+```
+
+Even among the `r nrow(calls)` peptides (that have at least one call), most of them have very few positive calls among all patients. We plot the distribution of the sum of calls among all patients for each of these peptides.
+
+```{r, fig.height = 3.8}
 # see row sums of calls
 calls_rowsums <- calls %>% select(any_of(patient_key$id)) %>% rowSums()
 calls_rowsums_df <- as.data.frame(table(calls_rowsums)) %>%
@@ -245,7 +336,7 @@ ggplot(data=calls_rowsums_df, aes(x=calls_rowsums, y=Freq)) +
   theme(plot.title = element_text(hjust = 0.5))
 ```
 
-For each of these `r nrow(calls)` peptides, we run a logistic regression based on these binary calls of the patients in order **to determine if calls are significantly different among patients of different cancer stages**.  
+For example, there are `r calls_rowsums_df$Freq[1] ` peptides with only one positive call among all `r nrow(patient_key)` patients. For each of these `r nrow(calls)` peptides, we run a logistic regression based on these binary calls of the patients in order **to determine if calls are significantly different among patients of different cancer stages**.  
 
 Specifically, for each of these `r nrow(calls)` peptides, we fit the following model:
 
@@ -270,20 +361,17 @@ hist(logreg_pval, breaks = 50, freq = T, main = "Logistic Regression Deviance p-
 
 It appears that there are hardly any signals of different calls pattern among patients of different cancer stages, which corroborates with the results in Figures 2, 3 and 4 in the main manuscript. After correcting for false discovery rate, no peptides appear to be significant. 
 
-# Tests on Fluorescence Levels with Binary-calls-filtering
+# Tests on Fluorescence Levels 
 
-We could lose a lot of information due to the conservative signal threshold of the calls data. Instead, what if we use the calls data as a filtering criterion. Specifically, we first compute the median of the $\log_2$ fluorescence levels of each patient's replicates, and then subset the `r nrow(calls)` peptides have at least one call among all patients. For each of these `r nrow(calls)` peptides, we perform one-way ANOVA (analysis of variance) to test the following:  
+We lose a lot of information due to the conservative signal threshold of the calls data. Instead, in this section, we will investigate antibody response level among patients of different cancer stages using the fluorescence data. In the next section, we will utilize both fluorescence and calls data to investigate our hypothesis and compare our results. First, we perform one-way ANOVA (analysis of variance) to test the following:  
 $H_0$: Antibody responses are the same for patients at different stages of prostate cancer.  
-$H_1$: Antibody responses are not the same for patients at different stages of prostate cancer.  
+$H_1$: Antibody responses are not the same for patients at different stages of prostate cancer. 
 
-After getting p-values for the `r nrow(calls)`  peptides, we plot the p-value histogram.
+After getting p-values for all the peptides, we plot the p-value histogram.
 
 ```{r}
-# get ANOVA p-values for only peptides with at least one non-zero call among all patients
-calls_anova_pval <- all_anova_pval[names(all_anova_pval) %in% calls$PROBE_ID]
-
 # get p-values histogram and FDR 
-calls_anova <- anova_func(calls_anova_pval)
+all_anova <- anova_func(all_anova_pval)
 ```
 
 If cancer-stage effect is not present in our peptide array data, then the p-values from the ANOVA would have a uniform distribution between 0 and 1, and we expect to see a rather flat-shaped histogram of p-values.  
@@ -293,16 +381,16 @@ However, the p-values histogram exhibits large counts of significant p-values (p
 We apply the Benjamini-Hochberg (BH) method on the ANOVA p-values to control for false discovery rate (FDR). The peptide counts at various BH FDR thresholds are tabulated below. 
 
 ```{r}
-kable( count.func(calls_anova$anova_BH, seq(0.01, 0.1, by = 0.01)),
+kable( count.func(all_anova$anova_BH, seq(0.01, 0.1, by = 0.01)),
        format = "latex", row.names= NA, col.names = NA, booktabs = T )%>%
   kable_styling(latex_options = c("scale_down", "hold_position")) %>%
   row_spec(1, hline_after = T)
 ```
 
-We also tabulate the peptide counts at various q-value thresholds as shown below.
+Here are also the peptide counts at different q-values thresholds.
 
 ```{r}
-kable( count.func(calls_anova$anova_qval, seq(0.01, 0.1, by = 0.01)),
+kable( count.func(all_anova$anova_qval, seq(0.01, 0.1, by = 0.01)),
        format = "latex", row.names= NA, col.names = NA, booktabs = T )%>%
   kable_styling(latex_options = c("scale_down", "hold_position")) %>%
   row_spec(1, hline_after = T)
@@ -312,7 +400,11 @@ It appears that the BH method gives a more conservative significant peptide coun
 
 ## Visualizing Results
 
-We have identified `r length(calls_anova$anova_BH[calls_anova$anova_BH <= 0.05])` peptides at 5\% Benjamini-Hochberg(BH) false discovery rate (FDR). We would like to obtain some graphical representations to illustrate how the $\log_2$ fluorescence levels differ across different cancer stages for these `r length(calls_anova$anova_BH[calls_anova$anova_BH <= 0.05])` peptides.  
+```{r}
+BH_FDR_counts <- length(all_anova$anova_BH[all_anova$anova_BH <= 0.05])
+```
+
+It appears that we have identify `r BH_FDR_counts` significant peptides at 5\% BH FDR. We would like to obtain some graphical representations to illustrate how the $\log_2$ fluorescence levels differ across different cancer stages for these peptides.  
 
 For each peptide, we remove the grand mean (row mean) of the $\log_2$ fluorescence levels for all patients, before applying the following visualization techniques:  
 
@@ -334,12 +426,10 @@ For purpose of uniformity, we also use the same color scheme to distinguish the 
 ```{r}
 BH_FDR_cutoff <- 0.05
 
-# calls_anova
-anova_dat <- raw_data_median %>%
-  filter((PROBE_ID %in% calls$PROBE_ID)) %>%
-  select(PROBE_ID, any_of(patient_key$id)) 
-anova_dat <- anova_dat %>%
-  mutate(anova_BH = calls_anova$anova_BH[anova_dat$PROBE_ID]) %>%
+# all_anova
+anova_dat <- raw_data_median %>% 
+  select(PROBE_ID, any_of(patient_key$id)) %>% 
+  mutate(anova_BH = all_anova$anova_BH[raw_data_median$PROBE_ID]) %>%
   filter(anova_BH <= BH_FDR_cutoff) %>%
   select(-anova_BH)
 
@@ -382,9 +472,9 @@ PCload.func(cols, shapes, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadin
 
 From the "\textit{PC2 vs PC1}" plot, we observe that all mCRPC points are clustered at the topright of the panel, whereas nmCRPC observations hover at the bottom of panel. The percentage of variance explained for each principal component (PC) is shown on the axis. Note that the first principal component manages to capture most of the variation in the data.   
 
-Next, we obtain the t-SNE plot. Just like PCA, t-SNE is a dimensionality reduction technique which was first introduced by van der Maaten and Hinton in 2008.
+Next, we obtain the t-SNE plot. Just like PCA, t-SNE is a dimensionality reduction technique which was first introduced by van der Maaten and Hinton in 2008.  
 
-```{r, fig.height = 6}
+```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean")}
 # t-SNE
 
 # how to specify parameter
@@ -399,20 +489,20 @@ tsne_anova <- Rtsne(tsnedat, initial_dims = initdim, perplexity = perplex,
 
 # t-SNE plot
 plot(tsne_anova$Y, ylab = "", xlab = "", col = cols, pch = shapes, main = "t-SNE plot")
-legend('topleft', pch = shp, col = pal,
+legend('topright', pch = shp, col = pal,
        c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC") )
 ```
 
 From the t-SNE plot, we observe that:  
 
-* The mCRPC points are clustered together near top-right of the plot.
-* Most of the nmCRPC patients are not too far off from the mCRPC subjects in the middle of the plot.
+* The mCRPC points are clustered together near top-left of the plot.
+* Most of the nmCRPC patients are not too far off from the mCRPC subjects. There seems to be 2 clusters of nmCRPC patients.
 * Most of the new_dx and nmCSPC patients are clustered at the bottom left and middle of the plot.
 * Normal subjects are somewhat "all over the place".  
 
-Finally, we plot the heatmap of the $\log_2$ fluorescence (after removing row means) of the `r length(calls_anova$anova_BH[calls_anova$anova_BH <= 0.05])` peptides at 5\% BH-FDR.
+Finally, we plot the heatmap of the $\log_2$ fluorescence (after removing row means) of these peptides at 5\% BH-FDR.
 
-```{r, fig.height = 10, fig.width = 8}
+```{r, fig.height = 10, fig.width = 8, cache = T, dependson=c("anova_dat_demean")}
 # heatmap color palette
 cls <- colorRampPalette(c("navy", "honeydew", "firebrick3", "brown"))(n = 1024)
 
@@ -433,11 +523,63 @@ heatmap3(anova_dat_demean,
 
 Again, we observe similar patterns that nmCSPC (colored turquoise) and new_dx (colored cornflowerblue) subjects are mostly clustered to the left part of the heatmap, whereas the mCRPC (colored red) patients and most of the nmCRPC patients (colored darkorange) are clustered to the right part of the heatmap. Again, normal subjects (colored navy) are "all over the place".
 
+## Gene-Set Analysis
+
+```{r}
+# read uniprot_gene csv
+uniprot_gene <- read_csv("uniprot_data_entrez.csv", col_types = cols_only(
+  seq_id = col_character(),
+  uniprot_id = col_character(),
+  gene_symbol = col_character(),
+  entrez_gene_id_pete = col_double(),
+  gene_names = col_character(),
+  protein_names = col_character()
+)) %>% filter(!(is.na(seq_id)) & !(is.na(entrez_gene_id_pete))) %>%
+  select(seq_id, uniprot_id, gene_symbol, entrez_gene_id_pete, gene_names, protein_names)
+
+## manually changing entrez_gene_id for PCA10 & PRO29
+uniprot_gene$entrez_gene_id_pete[uniprot_gene$seq_id == "PCA10"] <- 28912
+uniprot_gene$entrez_gene_id_pete[uniprot_gene$seq_id == "PRO29"] <- NA
+uniprot_gene <- uniprot_gene[!(is.na(uniprot_gene$entrez_gene_id_pete)),]
+
+# get unique seq_id that are associated with significant peptides
+signif_seq_id <- unique( raw_data_median$SEQ_ID[raw_data_median$PROBE_ID %in% anova_dat$PROBE_ID] )
+signif_seq_id <- signif_seq_id[!(is.na(signif_seq_id))] # just in case
+
+# convert these into binary vector
+seq_id_ok <- as.numeric(uniprot_gene$seq_id %in% signif_seq_id)
+names(seq_id_ok) <- uniprot_gene$entrez_gene_id_pete
+```
+
+Recall that the 177604 peptides correspond to 1611 proteins, and `r nrow(uniprot_gene)` of these proteins have matching genes in *uniprot_gene_entrez.csv*. The `r BH_FDR_counts` significant peptides at 5\% BH-FDR are associated with `r sum(seq_id_ok)` proteins with matching genes. In this analysis, we deem a protein to be significant if it has at least one significant associated peptide. We shall utilize this information to perform gene-set enrichment analysis.  
+
+Specifically, we investigate if there are any pre-specified gene-sets that are enriched for the genes associated with the list of significant peptides. These pre-determined gene-sets are defined based on their functional categories or biological properties, such as the Gene Ontology (GO) annotations. Enriched gene-sets could reflect the biological signals in the peptide microarray data.  
+The gene-set-analysis is performed with the R package ``allez``. We shall consider gene-sets containing at least 2 genes with Bonferroni-corrected enrichment p-values not exceeding 5\% . 
+
+```{r, cache = T, dependson=c("seq_id_ok"), echo = T}
+# gene-set analysis via allez!
+allez.go <- allez(seq_id_ok, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
+
+# nominal alpha for enrichment score
+nom.alpha <- 0.05 
+
+# minimum number of genes in gene-set to be considered 
+min.num.gene <- 2
+```
+
+We display the waterfall plot of the gene-set-analysis results. It turns out that in this case, there is only one significantly enriched gene set, since most of the proteins considered in this case are associated with at least one significant peptide.
+
+```{r, fig.height = 2.3, fig.width=9, echo = T}
+# Waterfall plot
+allezPlot(allez.go, n.cell = min.num.gene, nominal.alpha = nom.alpha)
+```
+
+
 ## Comparing Healthy Subjects vs Cancer Patients
 
 The one-way ANOVA is helpful in revealing peptides that exhibit significant difference in the group means of $\log_2$ fluorescence levels among patients at different stages of cancer. We may be interested to find out, for example, **if antibody response is significantly higher in cancer patients than in healthy subjects**. Using the linear-contrast method, we are able to further test this hypothesis after computing the ANOVA.  
 
-Specifically, it is a one-sided t-test comparing the averages of the $\log_2$ fluorescence levels among cancer patients and among healthy subjects, except that now, the degrees of freedom is based on the one-way ANOVA in the previous step, and the standard error of the t-test statistic is based on the root mean-squared error obtained from the one-way ANOVA and adjusted for the number of the healthy and cancer patients. This allows us to pull samples from different cancer stages and increase power -- with the caveat/assumption that the patients of different cancer stages share the same level of variation in antibody response. (Note that we could avoid doing the multiplicity control like Tukey's Honest Significant Difference if we are only interested in a particular contrast/comparison and not every possible combination of pairwise comparisons)
+Specifically, it is a one-sided t-test comparing the averages of the $\log_2$ fluorescence levels among cancer patients and among healthy subjects, except that now, the degrees of freedom and the standard error of the t-test statistic are based on the one-way ANOVA computed previously. This allows us to pull samples from different cancer stages and increase power -- with the caveat/assumption that the patients of different cancer stages share the same level of variation in antibody response. (Note that we could avoid doing the multiplicity control like Tukey's Honest Significant Difference if we are only interested in a particular contrast/comparison and not every possible combination of pairwise comparisons)
 
 ```{r}
 # again, make sure stage aligns with anova_dat
@@ -461,7 +603,7 @@ BH_FDR_tstat <- (BH_FDR_cancer - BH_FDR_normal) / sqrt(BH_FDR_MSE * (1/cancer_co
 BH_FDR_tstat_pval <- 1 - pt( BH_FDR_tstat, df = (length(unique(patient_key$stage)) - 1) )
 ```
 
-Among the `r length(calls_anova$anova_BH[calls_anova$anova_BH <= 0.05])` peptides at 5\% BH-FDR, only `r length(BH_FDR_tstat_pval[BH_FDR_tstat_pval <= 0.05])` of them are associated with higher antibody response in cancer patients than in normal subjects. We tabulate these peptides with their differences (of average $\log_2$ fluorescence levels between cancer and healthy subjects) and p-values of their t-statistics. 
+There are `r length(BH_FDR_tstat_pval[BH_FDR_tstat_pval <= 0.05])` peptides that are associated with higher antibody response in cancer patients than in normal subjects. We tabulate these peptides with their differences (of average $\log_2$ fluorescence levels between cancer and healthy subjects) and p-values of their t-statistics. 
 
 ```{r}
 # output these probes and their t-stat p-val
@@ -470,79 +612,30 @@ contr_df <- data.frame( peptide_id = anova_dat$PROBE_ID[BH_FDR_tstat_pval <= 0.0
                         tstat_pvalues = round(BH_FDR_tstat_pval[BH_FDR_tstat_pval <= 0.05],4))
 contr_df <- contr_df[base::order(contr_df$tstat_pvalues),]
 
-kable( contr_df, format = "latex", row.names= F, booktabs = T )%>%
-  kable_styling(font_size = 8, latex_options = c("hold_position")) 
+kable( contr_df, format = "latex", row.names= F, booktabs = T, longtable = T )%>%
+  kable_styling(font_size = 5, latex_options = c("hold_position", "repeat_header")) 
 ```
 
-For purpose of visualization, we also produce the boxplots of $\log_2$ fluorescence levels of subjects from these two groups for some of these peptides.
-
-```{r, fig.height=2.9}
-# boxplot specs
-stage2 <- as.character(contr_stage)
-stage2[stage2 != "normal"] <- "cancer"
-stage2 <- factor(stage2)
-boxplot_col <- c("red", "blue")
-boxplot_func <- function(mat, col = boxplot_col, draw){
-  # par(mar = c(2, 4.5, 2.3, 1),cex = 0.84)
-  graphics::boxplot( as.numeric(mat[draw,]) ~ stage2, 
-                     col=col, horizontal=TRUE, las=1, xlab = "log2(fluorescence)", ylab = "",
-                     main= paste(row.names(mat)[draw]) )
-}
-
-# get boxplot matrix ready
-boxplot_mat <- anova_dat[BH_FDR_tstat_pval <= 0.05,]
-boxplot_mat <- as.matrix(boxplot_mat %>% select(-PROBE_ID))
-row.names(boxplot_mat) <- anova_dat$PROBE_ID[BH_FDR_tstat_pval <= 0.05]
-boxplot_mat <- boxplot_mat[order(BH_FDR_tstat_pval[BH_FDR_tstat_pval <= 0.05]),]
-
-# boxplot
-boxplot_func(mat = boxplot_mat, draw = 1)
-boxplot_func(mat = boxplot_mat, draw = 2)
-boxplot_func(mat = boxplot_mat, draw = 3)
-```
-
-# Tests on Fluorescence Levels without Filtering
-
-As a comparison, we repeat the same calculation in the previous section, except that now, we do not apply any filtering on the peptides at all. First, we plot the histogram of p-values from the ANOVA.
-
-```{r}
-# get p-values histogram and FDR 
-all_anova <- anova_func(all_anova_pval)
-```
-
-We also tabulate the peptide counts at different BH FDR thresholds.
-
-```{r}
-kable( count.func(all_anova$anova_BH, seq(0.01, 0.1, by = 0.01)),
-       format = "latex", row.names= NA, col.names = NA, booktabs = T )%>%
-  kable_styling(latex_options = c("scale_down", "hold_position")) %>%
-  row_spec(1, hline_after = T)
-```
-
-Here are also the peptide counts at different q-values thresholds.
-
-```{r}
-kable( count.func(all_anova$anova_qval, seq(0.01, 0.1, by = 0.01)),
-       format = "latex", row.names= NA, col.names = NA, booktabs = T )%>%
-  kable_styling(latex_options = c("scale_down", "hold_position")) %>%
-  row_spec(1, hline_after = T)
-```
-
-## Visualizing Results
+# Tests on Fluorescence Levels with Binary-calls-filtering
 
 ```{r}
 names(calls_rowsums) <- calls$PROBE_ID
+BH_FDR_calls_counts <- sum(as.numeric(names(all_anova$anova_BH[all_anova$anova_BH<=0.05]) %in% 
+                                        names(calls_rowsums[calls_rowsums >=1])))
 ```
 
-It appears that we have identify `r length(all_anova$anova_BH[all_anova$anova_BH <= 0.05])` significant peptides at 5\% BH FDR. Out of these `r length(all_anova$anova_BH[all_anova$anova_BH <= 0.05])` significant peptides, `r sum(as.numeric(names(all_anova$anova_BH[all_anova$anova_BH<=0.05]) %in% names(calls_rowsums[calls_rowsums >=1])))` of them (or `r round( sum(as.numeric(names(all_anova$anova_BH[all_anova$anova_BH<=0.05]) %in% names(calls_rowsums[calls_rowsums >=1]))) / length(all_anova$anova_BH[all_anova$anova_BH <= 0.05]) * 100 ,4)` \% of them) also have at least one call among all patients. Now, plot the resulting PCA, t-SNE and heatmap of the residual $\log_2$ fluorescence of these peptides.
+Previously we identified `r BH_FDR_counts` significant peptides at 5\% BH FDR. Out of these peptides, `r BH_FDR_calls_counts` of them also have at least one call among all patients. We will use these calls as filtering criterion on the significant peptides -- in this section, we will examine whether zooming in on these `r BH_FDR_calls_counts` significant peptides help to improve clustering patterns that we would observe in PCA, t-SNE and heatmap. 
+
+## Visualization based on Filtered Significant Peptides
 
 ```{r}
-# all_anova
 anova_dat <- raw_data_median %>% 
   select(PROBE_ID, any_of(patient_key$id)) %>% 
   mutate(anova_BH = all_anova$anova_BH[raw_data_median$PROBE_ID]) %>%
   filter(anova_BH <= BH_FDR_cutoff) %>%
+  filter(PROBE_ID %in% calls$PROBE_ID) %>%
   select(-anova_BH)
+
 
 anova_dat_demean <- sweep(as.matrix(anova_dat %>% select(-PROBE_ID)), 1, 
                           rowMeans(as.matrix(anova_dat %>% select(-PROBE_ID))), "-") # centering by row
@@ -555,6 +648,8 @@ visual_stage <- patient_key$stage[visual_iii]
 cols = pal[ match(visual_stage, names(pal)) ]
 shapes = shp[  match(visual_stage, names(shp)) ]
 ```
+
+Based on the `r BH_FDR_calls_counts` significant peptides, the PCA plots become
 
 ```{r}
 # PCA
@@ -579,13 +674,9 @@ legend('topright', pch = shp, col = pal, cex = 0.5,
 PCload.func(cols, shapes, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
 ```
 
-We observe similar patterns in the PCA plot as we did when we apply the calls-filtering. Obviously, now that we have working with more peptides, the percentage of variance explained in the first principal component is slightly lower than what we achieved when we apply the calls-filtering.  
+The clustering patterns here is similar to the pattern we observe in the PCA plot for all `r BH_FDR_counts` peptides. The t-SNE plot now becomes
 
-```{r, fig.height=6}
-# t-SNE
-
-# how to specify parameter
-# refer: https://lvdmaaten.github.io/tsne/User_guide.pdf
+```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean")}
 tsnedat <- unname(t(anova_dat_demean)) # dim(X) = N samples by D dimensions 
 initdim <- 90 
 perplex <- 30 
@@ -596,13 +687,13 @@ tsne_anova <- Rtsne(tsnedat, initial_dims = initdim, perplexity = perplex,
 
 # t-SNE plot
 plot(tsne_anova$Y, ylab = "", xlab = "", col = cols, pch = shapes, main = "t-SNE plot")
-legend('topright', pch = shp, col = pal,
+legend('topleft', pch = shp, col = pal,
        c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC") )
 ```
 
-Again, we observe similar patterns in the t-SNE plot as we did when we apply the calls-filtering. There seems to be 2 clusters of nmCRPC patients.  
+Again, clustering pattern is somewhat similar. Finally, the heatmap becomes
 
-```{r, fig.height = 10, fig.width = 8}
+```{r, fig.height = 10, fig.width = 8, cache = T, dependson=c("anova_dat_demean")}
 # heatmap color palette
 cls <- colorRampPalette(c("navy", "honeydew", "firebrick3", "brown"))(n = 1024)
 
@@ -621,11 +712,94 @@ heatmap3(anova_dat_demean,
 )
 ```
 
-Again, we observe similar clustering patterns in the heatmap as we did when we apply the calls-filtering. 
+The clustering pattern that reveals cancer stage effect is more obvious in the previous section (when all `r BH_FDR_counts` peptides are considered) than what we observe here. 
+
+## Gene Set Analysis
+
+```{r}
+# read uniprot_gene csv
+uniprot_gene <- read_csv("uniprot_data_entrez.csv", col_types = cols_only(
+  seq_id = col_character(),
+  uniprot_id = col_character(),
+  gene_symbol = col_character(),
+  entrez_gene_id_pete = col_double(),
+  gene_names = col_character(),
+  protein_names = col_character()
+)) %>% filter(!(is.na(seq_id)) & !(is.na(entrez_gene_id_pete))) %>%
+  select(seq_id, uniprot_id, gene_symbol, entrez_gene_id_pete, gene_names, protein_names)
+
+## manually changing entrez_gene_id for PCA10 & PRO29
+uniprot_gene$entrez_gene_id_pete[uniprot_gene$seq_id == "PCA10"] <- 28912
+uniprot_gene$entrez_gene_id_pete[uniprot_gene$seq_id == "PRO29"] <- NA
+uniprot_gene <- uniprot_gene[!(is.na(uniprot_gene$entrez_gene_id_pete)),]
+
+# CAREFUL!
+# further filter uniprot_gene to limit them to proteins associated with filtered peptides based on calls
+uniprot_gene  <- uniprot_gene[ uniprot_gene$seq_id %in% (unique(calls$seq_id)) ,]
+
+# get unique seq_id that are associated with significant peptides
+signif_seq_id <- unique( raw_data_median$SEQ_ID[raw_data_median$PROBE_ID %in% anova_dat$PROBE_ID] )
+signif_seq_id <- signif_seq_id[!(is.na(signif_seq_id))] # just in case
+
+# convert these into binary vector
+seq_id_ok <- as.numeric(uniprot_gene$seq_id %in% signif_seq_id)
+names(seq_id_ok) <- uniprot_gene$entrez_gene_id_pete
+```
+
+We repeat our gene set enrichment analysis, but only with the proteins that are associated with peptides with at least one call among all patients. Hence, in this case, we only consider `r nrow(uniprot_gene)` proteins with matching genes, and `r sum(seq_id_ok)` of them are associated with significant peptides with at least one call among all patients. We use this information to perform our gene set analysis. 
+
+```{r, cache = T, dependson=c("seq_id_ok"), echo=T}
+# gene-set analysis via allez!
+allez.go <- allez(seq_id_ok, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
+
+# nominal alpha for enrichment score
+nom.alpha <- 0.05 
+
+# minimum number of genes in gene-set to be considered 
+min.num.gene <- 2
+```
+
+We display the waterfall plot of the gene-set-analysis results. 
+
+```{r, echo = T, fig.width=9, fig.height=5.3}
+# Waterfall plot
+allezPlot(allez.go, n.cell = min.num.gene, nominal.alpha = nom.alpha)
+```
+
+The waterfall plot was constructed by finding the significant (Bonferroni-corrected p-value < 0.05) GO term having the largest overlap with genes associated with proteins that have at least one significant peptide with at least one call among all patients (nucleic acid binding GO:0003676) and placing it in the top row of the figure. We next removed these genes from the list and found the significant GO term having the highest overlap with the remainder of the list (non-membrane-bounded organelle GO: 0043228). This process is repeated, and genes identified by this sequential process are counted along the x-axis, and the overlap between the GO terms can be visually assessed. Shading under the 'waterfall' component of the graph indicates genes that were annotated to previously named categories.  
+
+We also tabulate the enriched/overrepresented GO terms. The last column of the table shows the genes associated with proteins that have at least one significant peptide with at least one call among all patients.
+
+```{r}
+# tabulate enriched gene-set with signif genes only
+allez.tab <- allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha)
+rich.vec <- NULL
+rich.count.vec <- NULL
+for (i in 1 : dim(allez.tab)[1])
+{
+  check.string <- strsplit(allez.tab[i,6], split = ";")[[1]]
+  ori.count <- length(check.string)
+  rich.ok <- check.string %in% (uniprot_gene$gene_names)[match(signif_seq_id, uniprot_gene$seq_id)]
+  rich.count <- length(rich.ok[rich.ok])
+  rich.vec <- c( rich.vec, paste(check.string[rich.ok],collapse="; ") )
+  rich.count.vec <- c( rich.count.vec, paste(rich.count,"/",ori.count, sep = "") )
+}
+allez.tab2 <- cbind(allez.tab[,1:3], rich.count.vec, allez.tab[,5], rich.vec)
+allez.tab2[,5] <- round( as.numeric(allez.tab2[,5]), 4)
+colnames(allez.tab2) <- colnames(allez.tab)
+
+kable(allez.tab2, format = "latex", digits = 4, booktabs = T, longtable = T) %>%
+      kable_styling(latex_options = c("hold_position", "repeat_header"),
+                    full_width = F, font_size = 6) %>%
+      column_spec(2, width = "12em") %>%
+      column_spec(7, width = "16em")
+```
+
+We could compare these enriched gene-sets with the results in Figures 4 and 5 of the main manuscript.  
 
 ## Comparing Healthy Subjects vs Cancer Patients
 
-Finally, we repeat the linear contrast method on the `r length(all_anova$anova_BH[all_anova$anova_BH <= 0.05])` peptides at 5\% BH FDR to determine if fluorescence levels of these peptides are significantly higher among cancer patients than among healthy subjects.
+Here, we repeat the linear contrast method on these `r BH_FDR_calls_counts` peptides to determine if fluorescence levels of these peptides are significantly higher among cancer patients than among healthy subjects.
 
 ```{r}
 # again, make sure stage aligns with anova_dat
@@ -662,7 +836,48 @@ kable( contr_df, format = "latex", row.names= F, booktabs = T, longtable = T )%>
   kable_styling(font_size = 6, latex_options = c("hold_position", "repeat_header")) 
 ```
 
+Another form of verification using the calls data would be as follows: we check the sum of positive calls for each cancer stage for these `r length(BH_FDR_tstat_pval[BH_FDR_tstat_pval <= 0.05])` peptides. 
+
+```{r}
+kable( calls[calls$PROBE_ID %in% anova_dat$PROBE_ID[BH_FDR_tstat_pval <= 0.05], ] %>%
+  select(any_of(patient_key$id)) %>% 
+  colSums() %>% enframe(name = "id", value = "sum_of_calls") %>%
+  inner_join(patient_key) %>%
+  group_by(stage) %>% 
+  summarize( n = n(),
+             total_calls = sum(sum_of_calls) ),
+  format = "latex", row.names= F, booktabs = T) %>%
+  kable_styling(latex_options = c("hold_position")) 
+```
+
+As expected, almost all of the positive calls for these peptides come from cancer patients instead of normal subjects. For purpose of visualization, we also produce the boxplots of $\log_2$ fluorescence levels of subjects from these two groups for some of these peptides.
+
+```{r, fig.height=2.9}
+# boxplot specs
+stage2 <- as.character(contr_stage)
+stage2[stage2 != "normal"] <- "cancer"
+stage2 <- factor(stage2)
+boxplot_col <- c("red", "blue")
+boxplot_func <- function(mat, col = boxplot_col, draw){
+  # par(mar = c(2, 4.5, 2.3, 1),cex = 0.84)
+  graphics::boxplot( as.numeric(mat[draw,]) ~ stage2, 
+                     col=col, horizontal=TRUE, las=1, xlab = "log2(fluorescence)", ylab = "",
+                     main= paste(row.names(mat)[draw]) )
+}
+
+# get boxplot matrix ready
+boxplot_mat <- anova_dat[BH_FDR_tstat_pval <= 0.05,]
+boxplot_mat <- as.matrix(boxplot_mat %>% select(-PROBE_ID))
+row.names(boxplot_mat) <- anova_dat$PROBE_ID[BH_FDR_tstat_pval <= 0.05]
+boxplot_mat <- boxplot_mat[order(BH_FDR_tstat_pval[BH_FDR_tstat_pval <= 0.05]),]
+
+# boxplot
+boxplot_func(mat = boxplot_mat, draw = 1)
+boxplot_func(mat = boxplot_mat, draw = 2)
+boxplot_func(mat = boxplot_mat, draw = 3)
+```
+
 # Concluding Remarks
 
 * Calls are conservative -- most of the calls are zero anyway. No cancer-stage signals are observable from the calls data.
-* There appears to be cancer stage effects present in the $\log_2$ fluorescence data with or without filtering peptides based on calls. The clustering patterns of data points are similar with or without calls-filtering.  
+* There appears to be cancer stage effects present in the $\log_2$ fluorescence data with or without filtering peptides based on calls. The clustering patterns of data points based on cancer stages seem to be slightly more obvious without calls-filtering.  
