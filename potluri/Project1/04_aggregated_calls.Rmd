@@ -202,7 +202,7 @@ median_long$id <- factor(median_long$id, levels = c(
 ))
 
 ggplot(median_long, aes(x = id, y = fluorescence, fill = stage)) +
-  geom_boxplot() +
+  geom_boxplot(outlier.shape = ".") +
   # scale_fill_discrete(name="Stage") +
   # guides(fill=guide_legend(title="Stage")) +
   scale_fill_manual(name = "Stage", values = pal) +
