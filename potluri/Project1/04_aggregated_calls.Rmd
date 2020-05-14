@@ -309,7 +309,7 @@ To verify that positive calls are associated with stronger signals (remember tha
 
 ```{r, fig.height = 3.5, cache = T, dependson=c("calls_fl_df")}
 ggplot(calls_fl_df, aes(x = calls, y = fluorescence, fill = calls)) +
-  geom_boxplot() +
+  geom_boxplot(outlier.shape = ".") +
   labs(title = "Boxplots of Fluorescence Levels per Peptide per Patient", 
        x = "Calls per peptide per patient", y = "Median Fluorescence Levels") +
   theme(panel.background = element_rect(fill = "grey90"),
@@ -772,27 +772,16 @@ We also tabulate the enriched/overrepresented GO terms. The last column of the t
 
 ```{r}
 # tabulate enriched gene-set with signif genes only
-allez.tab <- allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha)
-rich.vec <- NULL
-rich.count.vec <- NULL
-for (i in 1 : dim(allez.tab)[1])
-{
-  check.string <- strsplit(allez.tab[i,6], split = ";")[[1]]
-  ori.count <- length(check.string)
-  rich.ok <- check.string %in% (uniprot_gene$gene_names)[match(signif_seq_id, uniprot_gene$seq_id)]
-  rich.count <- length(rich.ok[rich.ok])
-  rich.vec <- c( rich.vec, paste(check.string[rich.ok],collapse="; ") )
-  rich.count.vec <- c( rich.count.vec, paste(rich.count,"/",ori.count, sep = "") )
-}
-allez.tab2 <- cbind(allez.tab[,1:3], rich.count.vec, allez.tab[,5], rich.vec)
-allez.tab2[,5] <- round( as.numeric(allez.tab2[,5]), 4)
-colnames(allez.tab2) <- colnames(allez.tab)
+allez.tab <- allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha, in.set = T)
+allez.tab$set.size <- paste(allez.tab$in.set, allez.tab$set.size, sep = "/")
+allez.tab <- allez.tab %>% dplyr::select(-c(in.set, genes)) %>%
+  mutate(in.genes = str_replace_all(in.genes, ";", "; "))
 
-kable(allez.tab2, format = "latex", digits = 4, booktabs = T, longtable = T) %>%
+kable(allez.tab, format = "latex", digits = 4, booktabs = T, longtable = T) %>%
       kable_styling(latex_options = c("hold_position", "repeat_header"),
-                    full_width = F, font_size = 6) %>%
-      column_spec(2, width = "12em") %>%
-      column_spec(7, width = "16em")
+                    full_width = T, font_size = 6) %>%
+      column_spec(1, width = "12em") %>%
+      column_spec(6, width = "30em")
 ```
 
 We could compare these enriched gene-sets with the results in Figures 4 and 5 of the main manuscript.  

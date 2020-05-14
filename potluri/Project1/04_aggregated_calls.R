@@ -253,7 +253,7 @@ calls_fl_df <- data.frame(
 janitor::tabyl(calls_fl_df$calls) %>% janitor::adorn_pct_formatting() %>%
   rename(calls = "calls_fl_df$calls", patient_peptide_counts = n)
 ggplot(calls_fl_df, aes(x = calls, y = fluorescence, fill = calls)) +
-  geom_boxplot() +
+  geom_boxplot(outlier.shape = ".") +
   labs(title = "Boxplots of Fluorescence Levels per Peptide per Patient", 
        x = "Calls per peptide per patient", y = "Median (across replicates) Fluorescence Levels on log2 scale") +
   theme(panel.background = element_rect(fill = "grey90"),
@@ -333,7 +333,7 @@ median_long$id <- factor(median_long$id, levels = c(
 ))
 
 ggplot(median_long, aes(x = id, y = fluorescence, fill = stage)) +
-  geom_boxplot() +
+  geom_boxplot(outlier.shape = ".") +
   # scale_fill_discrete(name="Stage") +
   # guides(fill=guide_legend(title="Stage")) +
   scale_fill_manual(name = "Stage", values = pal) +
@@ -450,8 +450,8 @@ all_anova <- anova_func(all_anova_pval)
 # peptide counts at various FDR thresholds
 count.func(all_anova$anova_BH, seq(0.01, 0.1, by = 0.01))
 count.func(all_anova$anova_qval, seq(0.01, 0.1, by = 0.01))
-count.func(calls_anova$anova_BH, seq(0.01, 0.1, by = 0.01))
-count.func(calls_anova$anova_qval, seq(0.01, 0.1, by = 0.01))
+# count.func(calls_anova$anova_BH, seq(0.01, 0.1, by = 0.01))
+# count.func(calls_anova$anova_qval, seq(0.01, 0.1, by = 0.01))
 
 # comparing with calls
 names(calls_rowsums) <- calls$PROBE_ID
@@ -689,7 +689,7 @@ nom.alpha <- 0.05
 min.num.gene <- 2
 
 # Extract a table of top-ranked functional sets from allez output
-allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha)[,1:5]
+allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha, in.set = T)[,c(1:5,7)]
 allezTable(allez.kegg, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha)[,1:4]
 
 # Display an image of gene scores by functional sets
@@ -697,22 +697,10 @@ allezPlot(allez.go, n.cell = min.num.gene, nominal.alpha = nom.alpha)
 allezPlot(allez.kegg, n.cell = min.num.gene, nominal.alpha = nom.alpha)
 
 # tabulate enriched gene-set with signif genes only
-allez.tab <- allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha)
-rich.vec <- NULL
-rich.count.vec <- NULL
-for (i in 1 : dim(allez.tab)[1])
-{
-  check.string <- strsplit(allez.tab[i,6], split = ";")[[1]]
-  ori.count <- length(check.string)
-  rich.ok <- check.string %in% (uniprot_gene$gene_names)[match(signif_seq_id, uniprot_gene$seq_id)]
-  rich.count <- length(rich.ok[rich.ok])
-  rich.vec <- c( rich.vec, paste(check.string[rich.ok],collapse="; ") )
-  rich.count.vec <- c( rich.count.vec, paste(rich.count,"/",ori.count, sep = "") )
-}
-allez.tab2 <- cbind(allez.tab[,1:3], rich.count.vec, allez.tab[,5], rich.vec)
-allez.tab2[,5] <- round( as.numeric(allez.tab2[,5]), 4)
-colnames(allez.tab2) <- colnames(allez.tab)
-
+allez.tab <- allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha, in.set = T)
+allez.tab$set.size <- paste(allez.tab$in.set, allez.tab$set.size, sep = "/")
+allez.tab <- allez.tab %>% dplyr::select(-c(in.set, genes)) %>%
+  mutate(in.genes = str_replace_all(in.genes, ";", "; "))
 
 # save results
 # save(logreg_pval,
