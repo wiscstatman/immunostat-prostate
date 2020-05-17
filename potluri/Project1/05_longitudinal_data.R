@@ -65,8 +65,8 @@ LMM_func_proj2 <- function(LMM_pval){
 }
 
 
-load("KR_lmer_proj2_REML.RData")
-load("LMM_proj2_NoREML.RData")
+load("05_TestTreat_REML.RData")
+load("05_TestTreat_NoREML.RData")
 raw_data_median_proj2 <- read_csv("raw_data_median_proj2.csv")
 
 ####################################################################################### 
@@ -603,9 +603,9 @@ heatmap3(anova_dat_demean3,
          col = cls, # specify colors 
          ColSideColors = cols_time3, # specify patient color code
          labCol = colnames(anova_dat_demean3), # specify patient
-         ColSideLabs = "treatment_time", 
+         ColSideLabs = "treatment", 
          labRow = "",
-         xlab = "Patient_time",
+         xlab = "",
          # legendfun=function() showLegend(col = pal_proj2[c('ADT_3','PAP_3')],
          #                                 legend = c('ADT_3','PAP_3'),
          #                                 cex = 1.2,
@@ -697,9 +697,9 @@ heatmap3(anova_dat_demean6,
          col = cls, # specify colors 
          ColSideColors = cols_time6, # specify patient color code
          labCol = colnames(anova_dat_demean6), # specify patient
-         ColSideLabs = "treatment_time", 
+         ColSideLabs = "treatment", 
          labRow = "",
-         xlab = "Patient_time",
+         xlab = "",
          # legendfun=function() showLegend(col = pal_proj2[c('ADT_6','PAP_6')],
          #                                 legend = c('ADT_6','PAP_6'),
          #                                 cex = 1.2,
