@@ -8,6 +8,7 @@ library(heatmap3)
 library(ggplot2)
 library(gridExtra)
 library(tidyverse) # make sure you have the latest tidyverse !
+library(xlsx)
 
 
 ####################################################################################### 
@@ -522,14 +523,22 @@ heatmap3(anova_dat_demean,
 #######################################################################################
 
 BH_FDR_cutoff <- 0.01
-# Eff_time0 <- 1
-Eff_time3 <- 1
-Eff_time6 <- 1
-signif_crit <- (KR_LMM$LMM_BH <= BH_FDR_cutoff) & 
-  (Satterthwaite_LMM$LMM_BH <= BH_FDR_cutoff) &
-  # ( LMM_proj2_NoREML$Treat_Main  >= Eff_time0 ) &
-  ( (LMM_proj2_NoREML$Treat_Main + 3 * LMM_proj2_NoREML$Treat_Time) >= Eff_time3 ) &
-  ( (LMM_proj2_NoREML$Treat_Main + 6 * LMM_proj2_NoREML$Treat_Time) >= Eff_time6 )
+signif_crit_func <- function(Eff_thresh){
+  if (Eff_thresh > 0){
+    signif_crit <- (KR_LMM$LMM_BH <= BH_FDR_cutoff) & 
+      (Satterthwaite_LMM$LMM_BH <= BH_FDR_cutoff) &
+      ( (LMM_proj2_NoREML$Treat_Main + 3 * LMM_proj2_NoREML$Treat_Time) >= Eff_thresh ) &
+      ( (LMM_proj2_NoREML$Treat_Main + 6 * LMM_proj2_NoREML$Treat_Time) >= Eff_thresh )
+  } else {
+    signif_crit <- (KR_LMM$LMM_BH <= BH_FDR_cutoff) & 
+      (Satterthwaite_LMM$LMM_BH <= BH_FDR_cutoff) &
+      ( (LMM_proj2_NoREML$Treat_Main + 3 * LMM_proj2_NoREML$Treat_Time) <= Eff_thresh ) &
+      ( (LMM_proj2_NoREML$Treat_Main + 6 * LMM_proj2_NoREML$Treat_Time) <= Eff_thresh ) 
+  }
+  return(signif_crit)
+}
+signif_crit <- signif_crit_func(1)
+signif_crit <- signif_crit_func(-1)
 sum(as.numeric(signif_crit))  # check
 
 anova_dat_demean <- as.matrix( KR_lmer_proj2 %>% select(contains("id:")) )[ signif_crit , ]
@@ -617,14 +626,22 @@ heatmap3(anova_dat_demean3,
 #######################################################################################
 
 BH_FDR_cutoff <- 0.01
-# Eff_time0 <- 1
-Eff_time3 <- 1
-Eff_time6 <- 1
-signif_crit <- (KR_LMM$LMM_BH <= BH_FDR_cutoff) & 
-  (Satterthwaite_LMM$LMM_BH <= BH_FDR_cutoff) &
-  # ( LMM_proj2_NoREML$Treat_Main  >= Eff_time0 ) &
-  ( (LMM_proj2_NoREML$Treat_Main + 3 * LMM_proj2_NoREML$Treat_Time) >= Eff_time3 ) &
-  ( (LMM_proj2_NoREML$Treat_Main + 6 * LMM_proj2_NoREML$Treat_Time) >= Eff_time6 )
+signif_crit_func <- function(Eff_thresh){
+  if (Eff_thresh > 0){
+    signif_crit <- (KR_LMM$LMM_BH <= BH_FDR_cutoff) & 
+      (Satterthwaite_LMM$LMM_BH <= BH_FDR_cutoff) &
+      ( (LMM_proj2_NoREML$Treat_Main + 3 * LMM_proj2_NoREML$Treat_Time) >= Eff_thresh ) &
+      ( (LMM_proj2_NoREML$Treat_Main + 6 * LMM_proj2_NoREML$Treat_Time) >= Eff_thresh )
+  } else {
+    signif_crit <- (KR_LMM$LMM_BH <= BH_FDR_cutoff) & 
+      (Satterthwaite_LMM$LMM_BH <= BH_FDR_cutoff) &
+      ( (LMM_proj2_NoREML$Treat_Main + 3 * LMM_proj2_NoREML$Treat_Time) <= Eff_thresh ) &
+      ( (LMM_proj2_NoREML$Treat_Main + 6 * LMM_proj2_NoREML$Treat_Time) <= Eff_thresh ) 
+  }
+  return(signif_crit)
+}
+signif_crit <- signif_crit_func(1)
+signif_crit <- signif_crit_func(-1)
 sum(as.numeric(signif_crit))  # check
 
 anova_dat_demean <- as.matrix( KR_lmer_proj2 %>% select(contains("id:")) )[ signif_crit , ]
@@ -713,15 +730,23 @@ dev.off()
 #                          Boxplots of signif peptides                                #
 #######################################################################################
 
-BH_FDR_cutoff <- 0.0001
-# Eff_time0 <- 1
-Eff_time3 <- 2
-Eff_time6 <- 2
-signif_crit <- (KR_LMM$LMM_BH <= BH_FDR_cutoff) & 
-  (Satterthwaite_LMM$LMM_BH <= BH_FDR_cutoff) &
-  # ( LMM_proj2_NoREML$Treat_Main  >= Eff_time0 ) &
-  ( (LMM_proj2_NoREML$Treat_Main + 3 * LMM_proj2_NoREML$Treat_Time) >= Eff_time3 ) &
-  ( (LMM_proj2_NoREML$Treat_Main + 6 * LMM_proj2_NoREML$Treat_Time) >= Eff_time6 )
+BH_FDR_cutoff <- 0.001
+signif_crit_func <- function(Eff_thresh){
+  if (Eff_thresh > 0){
+    signif_crit <- (KR_LMM$LMM_BH <= BH_FDR_cutoff) & 
+      (Satterthwaite_LMM$LMM_BH <= BH_FDR_cutoff) &
+      ( (LMM_proj2_NoREML$Treat_Main + 3 * LMM_proj2_NoREML$Treat_Time) >= Eff_thresh ) &
+      ( (LMM_proj2_NoREML$Treat_Main + 6 * LMM_proj2_NoREML$Treat_Time) >= Eff_thresh )
+  } else {
+    signif_crit <- (KR_LMM$LMM_BH <= BH_FDR_cutoff) & 
+      (Satterthwaite_LMM$LMM_BH <= BH_FDR_cutoff) &
+      ( (LMM_proj2_NoREML$Treat_Main + 3 * LMM_proj2_NoREML$Treat_Time) <= Eff_thresh ) &
+      ( (LMM_proj2_NoREML$Treat_Main + 6 * LMM_proj2_NoREML$Treat_Time) <= Eff_thresh ) 
+  }
+  return(signif_crit)
+}
+signif_crit <- signif_crit_func(1)
+signif_crit <- signif_crit_func(-2)
 sum(as.numeric(signif_crit))  # check
 
 signif_median <- raw_data_median_proj2 %>% 
@@ -730,6 +755,7 @@ signif_median <- raw_data_median_proj2 %>%
 
 signif_total_eff <- 2*(LMM_proj2_NoREML$Treat_Main)[signif_crit] + 9*(LMM_proj2_NoREML$Treat_Time)[signif_crit]
 signif_median <- signif_median[ order(signif_total_eff, decreasing = T),]
+signif_median <- signif_median[ order(signif_total_eff),]
 head(signif_median) # check
 
 signif_boxplot.func <- function(signif_mat, draw){
@@ -745,7 +771,7 @@ signif_boxplot.func <- function(signif_mat, draw){
                         signif_mat$PROBE_ID[draw]), 
          x = "Time", y = "log2 Median Fluorescence") +
     scale_fill_manual(values=c("#00BFC4", "#F8766D")) +
-    # ylim(c(2,16)) +
+    ylim(c(2,16)) +
     theme(panel.background = element_rect(fill = "grey90"),
           panel.grid.major = element_line(color = "white"),
           panel.grid.minor = element_line(color = "white"),
@@ -845,3 +871,38 @@ allez.tab <- allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alp
 allez.tab$set.size <- paste(allez.tab$in.set, allez.tab$set.size, sep = "/")
 allez.tab <- allez.tab %>% dplyr::select(-c(in.set, genes)) %>%
   mutate(in.genes = str_replace_all(in.genes, ";", "; "))
+
+
+#######################################################################################
+#                                    Write to Excel file                              #
+#######################################################################################
+
+BH_FDR_cutoff <- 0.01
+signif_crit <- signif_crit_func(1)
+sheet1_df <- data.frame(
+  PROBE_ID = raw_data_median_proj2$PROBE_ID[signif_crit],
+  SEQ_ID = raw_data_median_proj2$SEQ_ID[signif_crit],
+  BH_FDR = KR_LMM$LMM_BH[signif_crit],
+  Treatment_Main_Effect = LMM_proj2_NoREML$Treat_Main[signif_crit],
+  Treatment_Time_Interaction = LMM_proj2_NoREML$Treat_Time[signif_crit]
+)
+sheet1_df <- sheet1_df[order(sheet1_df$BH_FDR),]
+
+
+signif_crit <- signif_crit_func(-1)
+sheet2_df <- data.frame(
+  PROBE_ID = raw_data_median_proj2$PROBE_ID[signif_crit],
+  SEQ_ID = raw_data_median_proj2$SEQ_ID[signif_crit],
+  BH_FDR = KR_LMM$LMM_BH[signif_crit],
+  Treatment_Main_Effect = LMM_proj2_NoREML$Treat_Main[signif_crit],
+  Treatment_Time_Interaction = LMM_proj2_NoREML$Treat_Time[signif_crit]
+)
+sheet2_df <- sheet2_df[order(sheet2_df$BH_FDR),]
+
+
+wb = createWorkbook()
+sheet = createSheet(wb, "Higher_in_PAP")
+addDataFrame(sheet1_df, sheet=sheet, row.names=FALSE)
+sheet = createSheet(wb, "Higher_in_ADT")
+addDataFrame(sheet2_df, sheet=sheet, row.names=FALSE)
+saveWorkbook(wb, "05_Longitudinal_Signif_Peptides.xlsx")
