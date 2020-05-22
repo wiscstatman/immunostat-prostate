@@ -563,6 +563,38 @@ heatmap3(anova_dat_demean,
          #                                 lwd = 5  )
 )
 
+#---------------------------------------------------------------------------------------
+# Column-Reordered Heatmap
+
+get_column_order.func <- function(stages){
+  heat_map <- heatmap3(anova_dat_demean[,visual_stage == stages],col = cls, labRow = "")
+  return( colnames(anova_dat_demean[,visual_stage == stages])[heat_map$colInd] )
+}
+
+normal_id_order <- get_column_order.func("normal")
+newdx_id_order <- get_column_order.func("new_dx")
+nmCSPC_id_order <- get_column_order.func("nmCSPC")
+nmCRPC_id_order <- get_column_order.func("nmCRPC")
+mCRPC_id_order <- get_column_order.func("mCRPC")
+
+id_order <- match( c(normal_id_order, newdx_id_order, nmCSPC_id_order, nmCRPC_id_order, mCRPC_id_order),
+                   colnames(anova_dat_demean) )
+
+heatmap3(anova_dat_demean[,id_order], 
+         col = cls, # specify colors 
+         ColSideColors = cols[id_order], # specify patient color code
+         Colv = NA,
+         labCol = visual_stage[id_order], # specify patient
+         ColSideLabs = "stages", 
+         labRow = "",
+         xlab = "Patients",
+         # legendfun=function() showLegend(col = c("navy", "cornflowerblue", "turquoise1", "darkorange1", "firebrick1"),
+         #                                 legend = c("normal",  "new_dx", "nmCSPC", "nmCRPC", "mCRPC"),
+         #                                 cex = 1.2,
+         #                                 lwd = 5  )
+)
+
+
 
 ####################################################################################### 
 #                                      Linear Contrast                                #

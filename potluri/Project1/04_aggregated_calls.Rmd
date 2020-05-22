@@ -523,6 +523,42 @@ heatmap3(anova_dat_demean,
 
 Again, we observe similar patterns that nmCSPC (colored turquoise) and new_dx (colored cornflowerblue) subjects are mostly clustered to the left part of the heatmap, whereas the mCRPC (colored red) patients and most of the nmCRPC patients (colored darkorange) are clustered to the right part of the heatmap. Again, normal subjects (colored navy) are "all over the place".
 
+We also plot the heatmap where we order the columns according to patients' stages instead of the default cluster dendrogram order.
+
+```{r, fig.height = 10, fig.width = 8, fig.show = 'hide', cache = T, dependson=c("anova_dat_demean")}
+# Column-Reordered Heatmap
+
+get_column_order.func <- function(stages){
+  heat_map <- heatmap3(anova_dat_demean[,visual_stage == stages],col = cls, labRow = "")
+  return( colnames(anova_dat_demean[,visual_stage == stages])[heat_map$colInd] )
+}
+
+normal_id_order <- get_column_order.func("normal")
+newdx_id_order <- get_column_order.func("new_dx")
+nmCSPC_id_order <- get_column_order.func("nmCSPC")
+nmCRPC_id_order <- get_column_order.func("nmCRPC")
+mCRPC_id_order <- get_column_order.func("mCRPC")
+
+id_order <- match( c(normal_id_order, newdx_id_order, nmCSPC_id_order, nmCRPC_id_order, mCRPC_id_order),
+                   colnames(anova_dat_demean) )
+```
+
+```{r, fig.height = 10, fig.width = 8, cache = T, dependson=c("anova_dat_demean", "id_order")}
+heatmap3(anova_dat_demean[,id_order], 
+         col = cls, # specify colors 
+         ColSideColors = cols[id_order], # specify patient color code
+         Colv = NA,
+         labCol = visual_stage[id_order], # specify patient
+         ColSideLabs = "stages", 
+         labRow = "",
+         xlab = "Patients",
+         # legendfun=function() showLegend(col = c("navy", "cornflowerblue", "turquoise1", "darkorange1", "firebrick1"),
+         #                                 legend = c("normal",  "new_dx", "nmCSPC", "nmCRPC", "mCRPC"),
+         #                                 cex = 1.2,
+         #                                 lwd = 5  )
+)
+```
+
 ## Gene-Set Analysis
 
 ```{r}
@@ -713,6 +749,42 @@ heatmap3(anova_dat_demean,
 ```
 
 The clustering pattern that reveals cancer stage effect is more obvious in the previous section (when all `r BH_FDR_counts` peptides are considered) than what we observe here. 
+
+We also plot the heatmap where we order the columns according to patients' stages instead of the default cluster dendrogram order.
+
+```{r, fig.height = 10, fig.width = 8, fig.show = 'hide', cache = T, dependson=c("anova_dat_demean")}
+# Column-Reordered Heatmap
+
+get_column_order.func <- function(stages){
+  heat_map <- heatmap3(anova_dat_demean[,visual_stage == stages],col = cls, labRow = "")
+  return( colnames(anova_dat_demean[,visual_stage == stages])[heat_map$colInd] )
+}
+
+normal_id_order <- get_column_order.func("normal")
+newdx_id_order <- get_column_order.func("new_dx")
+nmCSPC_id_order <- get_column_order.func("nmCSPC")
+nmCRPC_id_order <- get_column_order.func("nmCRPC")
+mCRPC_id_order <- get_column_order.func("mCRPC")
+
+id_order <- match( c(normal_id_order, newdx_id_order, nmCSPC_id_order, nmCRPC_id_order, mCRPC_id_order),
+                   colnames(anova_dat_demean) )
+```
+
+```{r, fig.height = 10, fig.width = 8, cache = T, dependson=c("anova_dat_demean", "id_order")}
+heatmap3(anova_dat_demean[,id_order], 
+         col = cls, # specify colors 
+         ColSideColors = cols[id_order], # specify patient color code
+         Colv = NA,
+         labCol = visual_stage[id_order], # specify patient
+         ColSideLabs = "stages", 
+         labRow = "",
+         xlab = "Patients",
+         # legendfun=function() showLegend(col = c("navy", "cornflowerblue", "turquoise1", "darkorange1", "firebrick1"),
+         #                                 legend = c("normal",  "new_dx", "nmCSPC", "nmCRPC", "mCRPC"),
+         #                                 cex = 1.2,
+         #                                 lwd = 5  )
+)
+```
 
 ## Gene Set Analysis
 
