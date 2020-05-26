@@ -42,8 +42,9 @@ library(tidyverse) # make sure you have the latest tidyverse !
 # specified color and shape scheme 
 pal_proj2 <- c("turquoise1", "cornflowerblue","navy", "orchid1", "darkorange1", "firebrick1")
 names(pal_proj2) <- c("ADT_0", "ADT_3", "ADT_6", "PAP_0", "PAP_3", "PAP_6")
-shp_proj2 <- c(8, 15, 16, 3, 17, 18)
-shp_proj2 <- c(8, 16, 18, 8, 16, 18)
+# shp_proj2 <- c(8, 15, 16, 3, 17, 18)
+# shp_proj2 <- c(8, 16, 18, 8, 16, 18)
+shp_proj2 <- rep(16, 6)
 names(shp_proj2) <- names(pal_proj2)
 
 # function to plot PCA loadings
@@ -338,11 +339,11 @@ pca.cumvar <- cumsum(pca.var)
 par(mfrow = c(1,2), pty = "s", mar = c(2.2,2.3,1.5,0.45), mgp = c(1.4,0.4,0),
     cex.axis = 0.84, cex.lab = 0.84, cex.main = 0.84, tcl = -0.4)
 PCload.func(cols_time3, shapes_time3, U, D, 1, 2, pca.var, title = "PC2 vs PC1") # PC loadings (PC2 vs PC1)
-legend('topright', cex = 0.5, pch = shp_proj2[c('ADT_3','PAP_3')], col = pal_proj2[c('ADT_3','PAP_3')], c('ADT_3','PAP_3') )
+legend('topright', cex = 0.5, pch = shp_proj2[c('ADT_3','PAP_3')], col = c("blue","red"), c('ADT_3','PAP_3') )
 PCload.func(cols_time3, shapes_time3, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
 ```
 
-```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean3")}
+```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean3","shp_proj2")}
 # t-SNE -- focus on heatmap at time 3?
 
 # how to specify parameter
@@ -416,7 +417,7 @@ legend('topright', cex = 0.5, pch = shp_proj2[c('ADT_6','PAP_6')], col = pal_pro
 PCload.func(cols_time6, shapes_time6, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
 ```
 
-```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean6")}
+```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean6", "shp_proj2")}
 # t-SNE -- focus on heatmap at time 6?
 
 # how to specify parameter
@@ -519,6 +520,7 @@ grid.arrange(
 # Visualization of Treatment Effects (Higher Antibody Response in ADT)
 
 ```{r}
+BH_FDR_cutoff <- 0.01
 signif_crit <- signif_crit_func(-1)
 signif_crit_sum_ADT <- sum(as.numeric(signif_crit))
 
@@ -562,11 +564,11 @@ pca.cumvar <- cumsum(pca.var)
 par(mfrow = c(1,2), pty = "s", mar = c(2.2,2.3,1.5,0.45), mgp = c(1.4,0.4,0),
     cex.axis = 0.84, cex.lab = 0.84, cex.main = 0.84, tcl = -0.4)
 PCload.func(cols_time3, shapes_time3, U, D, 1, 2, pca.var, title = "PC2 vs PC1") # PC loadings (PC2 vs PC1)
-legend('topright', cex = 0.5, pch = shp_proj2[c('ADT_3','PAP_3')], col = pal_proj2[c('ADT_3','PAP_3')], c('ADT_3','PAP_3') )
+legend('bottomright', cex = 0.5, pch = shp_proj2[c('ADT_3','PAP_3')], col = c("blue","red"), c('ADT_3','PAP_3') )
 PCload.func(cols_time3, shapes_time3, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
 ```
 
-```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean3")}
+```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean3","shp_proj2")}
 # t-SNE -- focus on heatmap at time 3?
 
 # how to specify parameter
@@ -640,7 +642,7 @@ legend('topright', cex = 0.5, pch = shp_proj2[c('ADT_6','PAP_6')], col = pal_pro
 PCload.func(cols_time6, shapes_time6, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
 ```
 
-```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean6")}
+```{r, fig.height=6, cache = T, dependson=c("anova_dat_demean6", "shp_proj2")}
 # t-SNE -- focus on heatmap at time 6?
 
 # how to specify parameter
