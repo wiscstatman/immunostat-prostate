@@ -1,13 +1,14 @@
 library(allez)
-library(pbkrtest) # Kenward-Roger approx
+# library(pbkrtest) # Kenward-Roger approx
 library(lme4) # linear mixed effects model
 library(lmerTest) # Satterthwaite approx
 library(fdrtool)
+library(locfdr)
 library(Rtsne)
 library(heatmap3)
 library(ggplot2)
 library(gridExtra)
-library(tidyverse) # make sure you have the latest tidyverse !
+library(tidyverse) # make sure you have the latest tidyverse ! and install the package "janitor"
 library(xlsx)
 
 ####################################################################################### 
@@ -30,12 +31,17 @@ count.func <- function(pval.vec, thresh.vec){
   for (i in thresh.vec ){
     counter <- c(counter, length(pval.vec[pval.vec <= i]))
   }
-  countab <- rbind(c("FDR threshold", thresh.vec),
+  countab <- rbind(c("locFDR threshold", thresh.vec),
                    c("Peptide counts", counter))
   return(countab)
 }
 
+
+# if you dont have the following data files, download it from shared Box folder:
+# https://uwmadison.app.box.com/folder/110549175126 
+
 raw_data_median_proj2 <- read_csv("raw_data_median_proj2.csv")
+load("08_LMER_results.RData")
 load("08_RandomEffects_LRstat.RData")
 
 ####################################################################################### 
@@ -116,7 +122,7 @@ example_row <- tapply( as.numeric(select(raw_data, contains("dat"))[1,]),
   rownames_to_column("id") %>% 
   pivot_longer(-id, names_to = "time", values_to = "fluorescence") %>% 
   arrange(time, id)
-sum(as.numeric( example_row$fluorescence == select(raw_data_median_proj2, contains("V"))[1,] )) == nrow(example_row) # check
+sum(as.numeric( example_row$fluorescence == select(raw_data_median_proj2, contains("V"))[1,] )) == nrow(example_row) 
 example_row$column_name <- paste( paste0("id:", example_row$id), paste0("time:", example_row$time), sep = "_" )
 raw_data_median_proj2 <- raw_data_median_proj2 %>% rename_at(vars(contains("V")), ~ example_row$column_name) 
 
@@ -176,6 +182,8 @@ ggplot(median_long_proj2, aes(x = id_time, y = fluorescence, fill = treat_time))
 #                                 Test Time Random Effects                            #
 ####################################################################################### 
 
+# want to know if random time slope is needed in the random effects?
+
 ncol_med_proj2 <- ncol(raw_data_median_proj2) 
 n_med_proj2 <- nrow(sample_key_proj2)
 
@@ -227,4 +235,224 @@ count.func(chisq2_BH_smallmodel_adt, seq(.05,.1,by=.01))
 ## Even under very conservative tests, there are many peptides that have signif random time slope
 ## Hemanth's analysis also suggests changes in individual antibody response over time vary across different patients
 ## With only 3 time points including baseline, we refrain from fitting more complicated time random effects
+
+
+####################################################################################### 
+#             Linear Mixed Model to Assess Treatment Effect (REML = TRUE)             #
+#                       Separate Models for PAP and ADT Groups                        #
+####################################################################################### 
+
+ncol_med_proj2 <- ncol(raw_data_median_proj2) 
+n_med_proj2 <- nrow(sample_key_proj2)
+
+# initiate
+PAP_resid_fit0 <- matrix(NA, nrow = nrow(raw_data_median_proj2), 
+                         ncol = nrow(sample_key_proj2%>%filter(treatment == "Vaccine")))
+ADT_resid_fit0 <- matrix(NA, nrow = nrow(raw_data_median_proj2), 
+                         ncol = nrow(sample_key_proj2%>%filter(treatment == "ADT")))
+PAP_result <- matrix(NA, nrow = nrow(raw_data_median_proj2), ncol = 8)
+ADT_result <- matrix(NA, nrow = nrow(raw_data_median_proj2), ncol = 8)
+
+colnames(PAP_resid_fit0) <- colnames(raw_data_median_proj2 %>% select(contains("id:pap")))
+colnames(ADT_resid_fit0) <- colnames(raw_data_median_proj2 %>% select(contains("id:adt")))
+colnames(PAP_result) <- paste0("PAP_", c(
+  "time_effect", 
+  "time_tstat",
+  "KR_df",
+  "KR_Ftest_pval",
+  "Satterthwaite_df",
+  "Satterthwaite_Ftest_pval",
+  "zval_1sided_KR",
+  "zval_1sided_Satterthwaite"
+))
+colnames(ADT_result) <- paste0("ADT_", c(
+  "time_effect", 
+  "time_tstat",
+  "KR_df",
+  "KR_Ftest_pval",
+  "Satterthwaite_df",
+  "Satterthwaite_Ftest_pval",
+  "zval_1sided_KR",
+  "zval_1sided_Satterthwaite"
+))
+
+Test_Time.func <- function(y, treat_type){
+  resp <- y[sample_key_proj2$treatment == treat_type]
+  fit1 <- lmer(resp ~ time + (1 + time | id), REML = T, 
+               data = sample_key_proj2[sample_key_proj2$treatment == treat_type,])
+  fit0 <- lmer(resp ~ 1 + (1 + time | id), REML = T, 
+               data = sample_key_proj2[sample_key_proj2$treatment == treat_type,])
+  resid_fit0 <- unname(round(resid(fit0),4))
+  effect_tstat <- coef(summary(fit1))['time',c('Estimate', 't value')] 
+  KR_df_pval <- contest(fit1, c(0,1), ddf = "Kenward-Roger")[c('DenDF', 'Pr(>F)')] 
+  Satterthwaite_df_pval <- contest(fit1, c(0,1))[c('DenDF', 'Pr(>F)')] 
+  zval_1sided_KR <- qnorm(pt( as.numeric(effect_tstat['t value']), 
+                             df = as.numeric(KR_df_pval['DenDF']) ,  lower.tail = T ))
+  zval_1sided_Satterthwaite <- qnorm(pt( as.numeric(effect_tstat['t value']), 
+                                        df = as.numeric(Satterthwaite_df_pval['DenDF']) ,  lower.tail = T ))
+  result <- c(
+    as.numeric(effect_tstat), 
+    as.numeric(KR_df_pval),
+    as.numeric(Satterthwaite_df_pval),
+    zval_1sided_KR,
+    zval_1sided_Satterthwaite
+  )
+  return( list(
+    resid_fit0 = resid_fit0,
+    result = result
+  ) )
+}
+
+
+for(i in 1:nrow(raw_data_median_proj2)){
+  y <- as.numeric(raw_data_median_proj2[i, (ncol_med_proj2 - n_med_proj2 + 1) : ncol_med_proj2])
+  PAP_test <- Test_Time.func(y, "Vaccine")
+  ADT_test <- Test_Time.func(y, "ADT")
+  
+  PAP_resid_fit0[i,] <- PAP_test$resid_fit0
+  PAP_result[i,] <- PAP_test$result
+  
+  ADT_resid_fit0[i,] <- ADT_test$resid_fit0
+  ADT_result[i,] <- ADT_test$result
+
+  if(i %% 100 == 0){
+    print(i)
+  }
+}
+
+save(PAP_resid_fit0, ADT_resid_fit0, PAP_result, ADT_result,
+     file = "08_LMER_results.RData")
+
+
+####################################################################################### 
+#                                           Local FDR                                 #
+#######################################################################################
+
+# F-test p-values based on KR adjustments more conservative than Satterthwaite
+
+plot(PAP_result[,"PAP_Satterthwaite_Ftest_pval"], PAP_result[,"PAP_KR_Ftest_pval"], pch = ".", xlim = c(0,.2), ylim = c(0,.2))
+abline(a=0, b=1, col = "red", lty=2, lwd = 2)
+
+plot(ADT_result[,"ADT_Satterthwaite_Ftest_pval"], ADT_result[,"ADT_KR_Ftest_pval"], pch = ".", xlim = c(0,.2), ylim = c(0,.2))
+abline(a=0, b=1, col = "red", lty=2, lwd = 2)
+
+## previous analysis concurs that Likelihood ratio test p-values (fitted with REML = F) are very liberal
+par(mfrow=c(2,2))
+hist(PAP_result[,"PAP_KR_Ftest_pval"], breaks=100, freq = F,
+     main = "PAP's (KR F-test) p-values density histogram")
+hist(PAP_result[,"PAP_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
+     main = "PAP's (Satterthwaite F-test) p-values density histogram ")
+hist(ADT_result[,"ADT_KR_Ftest_pval"], breaks=100, freq = F,
+     main = "ADT's (KR F-test) p-values density histogram ")
+hist(ADT_result[,"ADT_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
+     main = "ADT's (Satterthwaite F-test) p-values density histogram ")
+
+# BH threshold peptide counts
+PAP_Ftest_KR_BH <- p.adjust(PAP_result[,"PAP_KR_Ftest_pval"],method="BH")
+PAP_Ftest_Satterthwaite_BH <- p.adjust(PAP_result[,"PAP_Satterthwaite_Ftest_pval"],method="BH")
+ADT_Ftest_KR_BH <- p.adjust(ADT_result[,"ADT_KR_Ftest_pval"],method="BH")
+ADT_Ftest_Satterthwaite_BH <- p.adjust(ADT_result[,"ADT_Satterthwaite_Ftest_pval"],method="BH")
+
+count.func(PAP_Ftest_KR_BH, seq(.01,.1,by=.01))
+count.func(PAP_Ftest_Satterthwaite_BH, seq(.01,.1,by=.01))
+count.func(ADT_Ftest_KR_BH, seq(.63,.7,by=.01))
+count.func(ADT_Ftest_Satterthwaite_BH, seq(.63,.7,by=.01))
+
+# volcano plot (might be useful in setting initial values to estimate f0 in locfdr)
+volcano_plot.func <- function(time_effect, pval, BH, title){
+  plot(x = time_effect, y = -log10(pval), pch = ".",
+       xlab = "coefficient of time fixed effect", ylab = "-log10(F-test p-values)",
+       main = title)
+  lines(x = time_effect[ BH <= .01 & time_effect >= .3333 ], 
+        y = -log10(pval[ BH <= .01 & time_effect >= .3333]),
+        type = "p", pch = ".", col = "blue")
+}
+par(mfrow=c(2,2))
+volcano_plot.func(PAP_result[,"PAP_time_effect"], PAP_result[,"PAP_KR_Ftest_pval"], PAP_Ftest_KR_BH,
+                  "PAP's volcano plot (KR F-test)")
+volcano_plot.func(PAP_result[,"PAP_time_effect"], PAP_result[,"PAP_Satterthwaite_Ftest_pval"], PAP_Ftest_Satterthwaite_BH,
+                  "PAP's volcano plot (Satterthwaite F-test)")
+volcano_plot.func(ADT_result[,"ADT_time_effect"], ADT_result[,"ADT_KR_Ftest_pval"], ADT_Ftest_KR_BH,
+                  "ADT's volcano plot (KR F-test)")
+volcano_plot.func(ADT_result[,"ADT_time_effect"], ADT_result[,"ADT_Satterthwaite_Ftest_pval"], ADT_Ftest_Satterthwaite_BH,
+                  "ADT's volcano plot (Satterthwaite F-test)")
+
+## Note that no time effect of ADT exceeds .3333, ie. one fold-change after 3 months
+
+dev.off()
+#--------------------------------------------------------------------------------------
+# check PAP's locFDR based on z-scores of LMER tstat with KR-adjusted df 
+
+PAP_locfdr_KR <- locfdr(PAP_result[,"PAP_zval_1sided_KR"], 
+                        df = 17, # to fit estimated f(z) ,
+                        mlests = c(-2, 1.8),
+                        main = "PAP's locFDR based on LMER t-stat 1-sided pval with KR-adjusted df")
+
+## green solid curve: natural spline estimate of mixture density f(z)
+## blue dashed curve: ML estimated null subdensity p0f0
+## colored hist bars: estimated non-null counts
+
+PAP_locfdr_KR$fp0['mlest', 'p0'] # ML estimate of proportion of null peptides, p0 
+
+PAP_locfdr_KR$fp0['mlest', c('delta', 'sigma')] # ML estimate of null mean and sd
+## mean z-scores of null peptides so negative -- lower antibody response over time on null peptides?
+
+PAP_locfdr_KR$Efdr["Efdr"] # expected locFDR for non-null peptides : 
+
+locfdr(PAP_result[,"PAP_zval_1sided_KR"],df=17,plot=3,main="PAP's locFDR based on LMER t-stat 1-sided pval with KR-adjusted df")$call
+## proportion of non-null peptides less than a given level of locFDR
+
+# let's get what we want
+locFDR_PAP_KR <- PAP_locfdr_KR$fdr
+count.func(locFDR_PAP_KR, seq(.01,.1,by=.01))
+
+length( which(locFDR_PAP_KR <= .01 & PAP_result[,"PAP_time_effect"] >= .3333) )
+
+#--------------------------------------------------------------------------------------
+# check PAP's locFDR based on z-scores of LMER tstat with Satterthwaite-adjusted df 
+
+PAP_locfdr_Satterthwaite <- locfdr(PAP_result[,"PAP_zval_1sided_Satterthwaite"], 
+                                   df = 14,  # to fit estimated f(z) 
+                                   # mlests = c(-1.627, 1.378), # initial value for mean & sd of estimating f(0)
+                                   mlests = c(-2, 1.4), # initial value for mean & sd of estimating f(0)
+                                   main = "PAP's locFDR based on LMER t-stat 1-sided pval with Satterthwaite-adjusted df")
+
+PAP_locfdr_Satterthwaite$fp0['mlest', 'p0'] # ML estimate of proportion of null peptides, p0 
+
+PAP_locfdr_Satterthwaite$fp0['mlest', c('delta', 'sigma')] # ML estimate of null mean and sd
+## mean z-scores of null peptides so negative -- lower antibody response over time on null peptides?
+
+PAP_locfdr_Satterthwaite$Efdr["Efdr"] # expected locFDR for non-null peptides 
+
+# let's get what we want
+locFDR_PAP_Satterthwaite <- PAP_locfdr_Satterthwaite$fdr
+count.func(locFDR_PAP_Satterthwaite, seq(.01,.1,by=.01))
+
+length( which(locFDR_PAP_Satterthwaite <= .01 & PAP_result[,"PAP_time_effect"] >= .3333) )
+
+#--------------------------------------------------------------------------------------
+# check ADT's locFDR based on z-scores of LMER tstat with KR-adjusted df 
+
+ADT_locfdr_KR <- locfdr(ADT_result[,"ADT_zval_1sided_KR"], 
+                        df = 10, # to fit estimated f(z) 
+                        mlests = c(-1.5,1), # initial value for mean & sd of estimating f(0)
+                        # mlests = c(.05,2.3), # initial value for mean & sd of estimating f(0)
+                        main = "ADT's locFDR based on LMER t-stat 1-sided pval with KR-adjusted df")
+
+# let's get what we want
+locFDR_ADT_KR <- ADT_locfdr_KR$fdr
+count.func(locFDR_ADT_KR, seq(.01,.1,by=.01))
+
+#--------------------------------------------------------------------------------------
+# check ADT's locFDR based on z-scores of LMER tstat with Satterthwaite-adjusted df 
+
+ADT_locfdr_Satterthwaite <- locfdr(ADT_result[,"ADT_zval_1sided_Satterthwaite"], 
+                                   df = 10, # to fit estimated f(z) 
+                                   mlests = c(-1.5,1), # initial value for mean & sd of estimating f(0)
+                                   # mlests = c(.05,2.3), # initial value for mean & sd of estimating f(0)
+                                   main = "ADT's locFDR based on LMER t-stat 1-sided pval with Satterthwaite-adjusted df")
+
+# let's get what we want
+locFDR_ADT_Satterthwaite <- ADT_locfdr_Satterthwaite$fdr
+count.func(locFDR_ADT_Satterthwaite, seq(.01,.1,by=.01))
 
