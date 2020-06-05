@@ -342,22 +342,25 @@ ADT_Ftest_KR_BH <- p.adjust(ADT_result[,"ADT_KR_Ftest_pval"],method="BH")
 ADT_Ftest_Satterthwaite_BH <- p.adjust(ADT_result[,"ADT_Satterthwaite_Ftest_pval"],method="BH")
 
 ## previous analysis concurs that Likelihood ratio test p-values (fitted with REML = F) are very liberal
+
+png("08_pvalues_density_histograms.png", width = 1024, height = 1024)
 par(mfrow=c(2,2))
 hist(PAP_result[,"PAP_KR_Ftest_pval"], breaks=100, freq = F,
      main = "PAP's (KR F-test) p-values density histogram")
-text(x=.7, y=20, paste0(sum(as.numeric(PAP_Ftest_KR_BH <= .01))," peptides at 1% BH FDR"), cex = 0.8)
+text(x=.7, y=20, paste0(sum(as.numeric(PAP_Ftest_KR_BH <= .01))," peptides at 1% BH FDR"), cex = 1)
 
 hist(PAP_result[,"PAP_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
      main = "PAP's (Satterthwaite F-test) p-values density histogram ")
-text(x=.7, y=20, paste0(sum(as.numeric(PAP_Ftest_Satterthwaite_BH <= .01))," peptides at 1% BH FDR"), cex = 0.8)
+text(x=.7, y=20, paste0(sum(as.numeric(PAP_Ftest_Satterthwaite_BH <= .01))," peptides at 1% BH FDR"), cex = 1)
 
 hist(ADT_result[,"ADT_KR_Ftest_pval"], breaks=100, freq = F,
      main = "ADT's (KR F-test) p-values density histogram ")
-text(x=.7, y=1.3, "No signif peptides at 20% BH FDR", cex = 0.8)
+text(x=.7, y=1.3, "No signif peptides at 20% BH FDR", cex = 1)
 
 hist(ADT_result[,"ADT_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
      main = "ADT's (Satterthwaite F-test) p-values density histogram ")
-text(x=.7, y=1.3, "No signif peptides at 20% BH FDR", cex = 0.8)
+text(x=.7, y=1.3, "No signif peptides at 20% BH FDR", cex = 1)
+dev.off()
 
 # BH threshold peptide counts
 count.func(PAP_Ftest_KR_BH, seq(.01,.1,by=.01))
