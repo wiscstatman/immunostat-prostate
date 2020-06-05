@@ -336,23 +336,30 @@ abline(a=0, b=1, col = "red", lty=2, lwd = 2)
 plot(ADT_result[,"ADT_Satterthwaite_Ftest_pval"], ADT_result[,"ADT_KR_Ftest_pval"], pch = ".", xlim = c(0,.2), ylim = c(0,.2))
 abline(a=0, b=1, col = "red", lty=2, lwd = 2)
 
-## previous analysis concurs that Likelihood ratio test p-values (fitted with REML = F) are very liberal
-par(mfrow=c(2,2))
-hist(PAP_result[,"PAP_KR_Ftest_pval"], breaks=100, freq = F,
-     main = "PAP's (KR F-test) p-values density histogram")
-hist(PAP_result[,"PAP_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
-     main = "PAP's (Satterthwaite F-test) p-values density histogram ")
-hist(ADT_result[,"ADT_KR_Ftest_pval"], breaks=100, freq = F,
-     main = "ADT's (KR F-test) p-values density histogram ")
-hist(ADT_result[,"ADT_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
-     main = "ADT's (Satterthwaite F-test) p-values density histogram ")
-
-# BH threshold peptide counts
 PAP_Ftest_KR_BH <- p.adjust(PAP_result[,"PAP_KR_Ftest_pval"],method="BH")
 PAP_Ftest_Satterthwaite_BH <- p.adjust(PAP_result[,"PAP_Satterthwaite_Ftest_pval"],method="BH")
 ADT_Ftest_KR_BH <- p.adjust(ADT_result[,"ADT_KR_Ftest_pval"],method="BH")
 ADT_Ftest_Satterthwaite_BH <- p.adjust(ADT_result[,"ADT_Satterthwaite_Ftest_pval"],method="BH")
 
+## previous analysis concurs that Likelihood ratio test p-values (fitted with REML = F) are very liberal
+par(mfrow=c(2,2))
+hist(PAP_result[,"PAP_KR_Ftest_pval"], breaks=100, freq = F,
+     main = "PAP's (KR F-test) p-values density histogram")
+text(x=.7, y=20, paste0(sum(as.numeric(PAP_Ftest_KR_BH <= .01))," peptides at 1% BH FDR"), cex = 0.8)
+
+hist(PAP_result[,"PAP_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
+     main = "PAP's (Satterthwaite F-test) p-values density histogram ")
+text(x=.7, y=20, paste0(sum(as.numeric(PAP_Ftest_Satterthwaite_BH <= .01))," peptides at 1% BH FDR"), cex = 0.8)
+
+hist(ADT_result[,"ADT_KR_Ftest_pval"], breaks=100, freq = F,
+     main = "ADT's (KR F-test) p-values density histogram ")
+text(x=.7, y=1.3, "No signif peptides at 20% BH FDR", cex = 0.8)
+
+hist(ADT_result[,"ADT_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
+     main = "ADT's (Satterthwaite F-test) p-values density histogram ")
+text(x=.7, y=1.3, "No signif peptides at 20% BH FDR", cex = 0.8)
+
+# BH threshold peptide counts
 count.func(PAP_Ftest_KR_BH, seq(.01,.1,by=.01))
 count.func(PAP_Ftest_Satterthwaite_BH, seq(.01,.1,by=.01))
 count.func(ADT_Ftest_KR_BH, seq(.63,.7,by=.01))
@@ -367,6 +374,8 @@ volcano_plot.func <- function(time_effect, pval, BH, title){
         y = -log10(pval[ BH <= .01 & time_effect >= .3333]),
         type = "p", pch = ".", col = "blue")
 }
+
+png("08_volcano_plots.png", width = 1024, height = 1024)
 par(mfrow=c(2,2))
 volcano_plot.func(PAP_result[,"PAP_time_effect"], PAP_result[,"PAP_KR_Ftest_pval"], PAP_Ftest_KR_BH,
                   "PAP's volcano plot (KR F-test)")
@@ -376,10 +385,10 @@ volcano_plot.func(ADT_result[,"ADT_time_effect"], ADT_result[,"ADT_KR_Ftest_pval
                   "ADT's volcano plot (KR F-test)")
 volcano_plot.func(ADT_result[,"ADT_time_effect"], ADT_result[,"ADT_Satterthwaite_Ftest_pval"], ADT_Ftest_Satterthwaite_BH,
                   "ADT's volcano plot (Satterthwaite F-test)")
+dev.off()
 
 ## Note that no time effect of ADT exceeds .3333, ie. one fold-change after 3 months
 
-dev.off()
 #--------------------------------------------------------------------------------------
 # check PAP's locFDR based on z-scores of LMER tstat with KR-adjusted df 
 
@@ -456,3 +465,35 @@ ADT_locfdr_Satterthwaite <- locfdr(ADT_result[,"ADT_zval_1sided_Satterthwaite"],
 locFDR_ADT_Satterthwaite <- ADT_locfdr_Satterthwaite$fdr
 count.func(locFDR_ADT_Satterthwaite, seq(.01,.1,by=.01))
 
+#--------------------------------------------------------------------------------------
+# let's see if we could plot all locfdr graphs together
+
+png("08_locFDR_plots.png", width = 1024, height = 1024)
+par(mfrow=c(2,2))
+locfdr(PAP_result[,"PAP_zval_1sided_KR"], 
+       df = 17, # to fit estimated f(z) ,
+       mlests = c(-2, 1.8),
+       main = "PAP's locFDR based on LMER t-stat 1-sided pval \nwith KR-adjusted df")
+text(x = 3, y = 3000, paste0(sum(as.numeric(locFDR_PAP_KR <= .01)), " peptides at 1% locFDR"), cex = 1)
+
+locfdr(PAP_result[,"PAP_zval_1sided_Satterthwaite"], 
+       df = 14,  # to fit estimated f(z) 
+       # mlests = c(-1.627, 1.378), # initial value for mean & sd of estimating f(0)
+       mlests = c(-2, 1.4), # initial value for mean & sd of estimating f(0)
+       main = "PAP's locFDR based on LMER t-stat 1-sided pval \nwith Satterthwaite-adjusted df")
+text(x = 2.5, y = 3000, paste0(sum(as.numeric(locFDR_PAP_Satterthwaite <= .01)), " peptides at 1% locFDR"), cex = 1)
+
+locfdr(ADT_result[,"ADT_zval_1sided_KR"], 
+       df = 10, # to fit estimated f(z) 
+       mlests = c(-1.5,1), # initial value for mean & sd of estimating f(0)
+       # mlests = c(.05,2.3), # initial value for mean & sd of estimating f(0)
+       main = "ADT's locFDR based on LMER t-stat 1-sided pval \nwith KR-adjusted df")
+text(x = 3, y = 2500, paste0(sum(as.numeric(locFDR_ADT_KR <= .01)), " peptides at 1% locFDR"), cex = 1)
+
+locfdr(ADT_result[,"ADT_zval_1sided_Satterthwaite"], 
+       df = 10, # to fit estimated f(z) 
+       mlests = c(-1.5,1), # initial value for mean & sd of estimating f(0)
+       # mlests = c(.05,2.3), # initial value for mean & sd of estimating f(0)
+       main = "ADT's locFDR based on LMER t-stat 1-sided pval \nwith Satterthwaite-adjusted df")
+text(x = 3, y = 3000, paste0(sum(as.numeric(locFDR_ADT_Satterthwaite <= .01)), " peptides at 1% locFDR"), cex = 1)
+dev.off()
