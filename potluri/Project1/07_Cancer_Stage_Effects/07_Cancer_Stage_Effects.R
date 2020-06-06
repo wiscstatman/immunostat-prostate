@@ -5,6 +5,7 @@ library(fdrtool)
 library(Rtsne)
 library(heatmap3)
 library(ggplot2)
+library(matrixStats) #rowMedians
 library(tidyverse) # make sure you have the latest tidyverse !
 library(xlsx)
 
@@ -420,21 +421,25 @@ count.func(logreg_qval, seq(0.01, 0.05, by = 0.01))
 
 
 ####################################################################################### 
-#                           Another test -- one-way ANOVA                             #
+#                 Another test -- one-way ANOVA & Kruskal-Wallis Test                 #
 ####################################################################################### 
 
 # make sure patients' stages align with raw_data_median
 median_iii <- match( colnames(select( raw_data_median, any_of(array_id_key$id) )), patient_key$id )
 median_stage <- patient_key$stage[median_iii]
+median_stage <- factor(median_stage)
 sum(as.numeric( colnames(select( raw_data_median, any_of(array_id_key$id) )) == patient_key$id[median_iii] )) == nrow(patient_key)
 
-# initiate
+ncol_median <- ncol(raw_data_median)
+n <- nrow(patient_key)
+
+#---------------------------------------------------------------------------------------
+
+# initiate ANOVA
 all_anova_pval <- rep(NA, nrow(raw_data_median))
 names(all_anova_pval) <- raw_data_median$PROBE_ID
 all_anova_mse <- rep(NA, nrow(raw_data_median))
 names(all_anova_mse) <- raw_data_median$PROBE_ID
-ncol_median <- ncol(raw_data_median)
-n <- nrow(patient_key)
 
 # compute one-way anova p-values
 for(i in 1:nrow(raw_data_median)){
@@ -462,6 +467,78 @@ names(calls_rowsums) <- calls$PROBE_ID
 sum(as.numeric(names(calls_anova$anova_BH[calls_anova$anova_BH<=0.05]) %in% names(calls_rowsums[calls_rowsums >=3])))
 sum(as.numeric(names(all_anova$anova_BH[all_anova$anova_BH<=0.05]) %in% names(calls_rowsums[calls_rowsums >=3])))
 
+#---------------------------------------------------------------------------------------
+# now do kruskal-wallis tests
+
+# initiate kruskal-wallis(KW)
+all_kw_pval <- rep(NA, nrow(raw_data_median))
+names(all_kw_pval) <- raw_data_median$PROBE_ID
+
+for(i in 1:nrow(raw_data_median)){
+  all_kw_pval[i] <- kruskal.test( as.numeric(raw_data_median[i, (ncol_median - n + 1) : ncol_median]) ~ median_stage )$'p.value' 
+  print(i)
+}
+
+# get p-values histogram and FDR 
+all_kw <- anova_func(all_kw_pval)
+
+# peptide counts at various FDR thresholds
+count.func(all_kw$anova_BH, seq(0.01, 0.1, by = 0.01))
+
+# signif for both ANOVA & Kruskal-Wallis
+length(which(all_kw$anova_BH <= .05 & all_anova$anova_BH <= .05))
+
+#---------------------------------------------------------------------------------------
+# compare kruskal-wallis pval vs ANOVA pval
+
+plot(x = all_anova_pval, y = all_kw_pval, pch = ".", xlab = "ANOVA p-values", ylab = "Kruskal-Wallis p-values")
+lines(x = all_anova_pval[all_anova$anova_BH <= .05], 
+      y = all_kw_pval[all_anova$anova_BH <= .05], 
+      type = "p", pch = 20, col = "red")
+lines(x = all_anova_pval[all_kw$anova_BH <= .05], 
+      y = all_kw_pval[all_kw$anova_BH <= .05], 
+      type = "p", pch = 20, col = "blue")
+lines(x = all_anova_pval[all_anova$anova_BH <= .05 & all_kw$anova_BH <= .05], 
+      y = all_kw_pval[all_anova$anova_BH <= .05 & all_kw$anova_BH <= .05], 
+      type = "p", pch = 20, col = "green")
+
+# check boxplot of peptide with very signif ANOVA pval but not kruskal-wallis pval
+ANOVA_but_not_KW <- raw_data_median %>% 
+  filter(all_anova_pval <.001 & all_kw_pval >.2) %>%
+  select(PROBE_ID, any_of(array_id_key$id)) %>%
+  as.matrix()
+
+par(mfrow=c(3,1))
+par(mar=c(5.1, 6.1, 4.1, 2.1))
+graphics::boxplot(as.numeric(ANOVA_but_not_KW[1,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+                  col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
+                  main = ANOVA_but_not_KW[1,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
+graphics::boxplot(as.numeric(ANOVA_but_not_KW[2,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+                  col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
+                  main = ANOVA_but_not_KW[2,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
+graphics::boxplot(as.numeric(ANOVA_but_not_KW[3,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+                  col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
+                  main = ANOVA_but_not_KW[2,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
+
+
+# check boxplot of peptide with very signif kruskal-wallis pval but not ANOVA pval
+KW_but_not_ANOVA <- raw_data_median %>% 
+  filter(all_anova_pval > .7 & all_kw_pval < .001) %>%
+  select(PROBE_ID, any_of(array_id_key$id)) %>%
+  as.matrix()
+
+par(mfrow=c(3,1))
+par(mar=c(5.1, 6.1, 4.1, 2.1))
+graphics::boxplot(as.numeric(KW_but_not_ANOVA[1,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+                  col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
+                  main = KW_but_not_ANOVA[1,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
+graphics::boxplot(as.numeric(KW_but_not_ANOVA[2,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+                  col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
+                  main = KW_but_not_ANOVA[2,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
+graphics::boxplot(as.numeric(KW_but_not_ANOVA[3,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+                  col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
+                  main = KW_but_not_ANOVA[2,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
+
 ####################################################################################### 
 #                                ANOVA Visualization                                  #
 #######################################################################################
@@ -472,6 +549,7 @@ BH_FDR_cutoff <- 0.05
 anova_dat <- raw_data_median %>% 
   select(PROBE_ID, any_of(patient_key$id)) %>% 
   mutate(anova_BH = all_anova$anova_BH[raw_data_median$PROBE_ID]) %>%
+  # mutate(anova_BH = all_kw$anova_BH[raw_data_median$PROBE_ID]) %>%
   filter(anova_BH <= BH_FDR_cutoff) %>%
   select(-anova_BH)
 
@@ -484,12 +562,12 @@ anova_dat <- raw_data_median %>%
 #   filter(anova_BH <= BH_FDR_cutoff) %>%
 #   select(-anova_BH)
 
-anova_dat <- raw_data_median %>% 
-  select(PROBE_ID, any_of(patient_key$id)) %>% 
-  mutate(anova_BH = all_anova$anova_BH[raw_data_median$PROBE_ID]) %>%
-  filter(anova_BH <= BH_FDR_cutoff) %>%
-  filter(PROBE_ID %in% calls$PROBE_ID) %>%
-  select(-anova_BH)
+# anova_dat <- raw_data_median %>% 
+#   select(PROBE_ID, any_of(patient_key$id)) %>% 
+#   mutate(anova_BH = all_anova$anova_BH[raw_data_median$PROBE_ID]) %>%
+#   filter(anova_BH <= BH_FDR_cutoff) %>%
+#   filter(PROBE_ID %in% calls$PROBE_ID) %>%
+#   select(-anova_BH)
 
 
 anova_dat_demean <- sweep(as.matrix(anova_dat %>% select(-PROBE_ID)), 1, 
@@ -695,6 +773,24 @@ normal_mean <- group_means.func("normal", .05)
 cancer_mean <- group_means.func(c("new_dx", "nmCSPC", "nmCRPC", "mCRPC"), .05)
 NOT_mCRPC_mean <- group_means.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"), .05)
 
+# get group medians as well
+group_median.func <- function(group, BH_filter){
+  raw_data_median %>% 
+    select(any_of(array_id_key$id)) %>% 
+    select(which(patient_key$stage %in% group)) %>%
+    filter(all_anova$anova_BH <= BH_filter) %>%
+    as.matrix() %>%
+    matrixStats::rowMedians() 
+}
+mCRPC_median <- group_median.func("mCRPC", .05)
+nmCRPC_median <- group_median.func("nmCRPC", .05)
+nmCSPC_median <- group_median.func("nmCSPC", .05)
+newdx_median <- group_median.func("new_dx", .05)
+normal_median <- group_median.func("normal", .05)
+cancer_median <- group_median.func(c("new_dx", "nmCSPC", "nmCRPC", "mCRPC"), .05)
+NOT_mCRPC_median <- group_median.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"), .05)
+
+
 # post-hoc analysis function
 # posthoc_func <- function(posthoc_pval, groupmean_diff, countfunc_seq=seq(.03,.1,by=.01), effectsize_thresh=1, BH_thresh=.05){
 #   hist(posthoc_pval, breaks = 70)
@@ -719,12 +815,12 @@ newdx_normal_wilcox_pval <- rep(NA, nrow(median_subset))
 cancer_normal_wilcox_pval <- rep(NA, nrow(median_subset))
 mCRPC_others_wilcox_pval <- rep(NA, nrow(median_subset))
 
-mCRPC_normal_wilcox_pval <- rep(NA, nrow(median_subset))
-nmCRPC_normal_wilcox_pval <- rep(NA, nrow(median_subset))
-nmCSPC_normal_wilcox_pval <- rep(NA, nrow(median_subset))
-mCRPC_newdx_wilcox_pval <- rep(NA, nrow(median_subset))
-nmCRPC_newdx_wilcox_pval <- rep(NA, nrow(median_subset))
-mCRPC_nmCSPC_wilcox_pval <- rep(NA, nrow(median_subset))
+# mCRPC_normal_wilcox_pval <- rep(NA, nrow(median_subset))
+# nmCRPC_normal_wilcox_pval <- rep(NA, nrow(median_subset))
+# nmCSPC_normal_wilcox_pval <- rep(NA, nrow(median_subset))
+# mCRPC_newdx_wilcox_pval <- rep(NA, nrow(median_subset))
+# nmCRPC_newdx_wilcox_pval <- rep(NA, nrow(median_subset))
+# mCRPC_nmCSPC_wilcox_pval <- rep(NA, nrow(median_subset))
 
 # get wilcox pval (2-sided)
 for(i in 1: nrow(median_subset)){
@@ -759,36 +855,36 @@ for(i in 1: nrow(median_subset)){
     alternative = "two.sided", exact = F, conf.level = .95
   )$'p.value'
   
-  mCRPC_normal_wilcox_pval[i] <- wilcox.test(
-    x = as.numeric(median_subset[i, patient_key$stage == "mCRPC"]),
-    y = as.numeric(median_subset[i, patient_key$stage == "normal"]),
-    alternative = "two.sided", exact = F, conf.level = .95
-  )$'p.value'
-  nmCRPC_normal_wilcox_pval[i] <- wilcox.test(
-    x = as.numeric(median_subset[i, patient_key$stage == "nmCRPC"]),
-    y = as.numeric(median_subset[i, patient_key$stage == "normal"]),
-    alternative = "two.sided", exact = F, conf.level = .95
-  )$'p.value'
-  nmCSPC_normal_wilcox_pval[i] <- wilcox.test(
-    x = as.numeric(median_subset[i, patient_key$stage == "nmCSPC"]),
-    y = as.numeric(median_subset[i, patient_key$stage == "normal"]),
-    alternative = "two.sided", exact = F, conf.level = .95
-  )$'p.value'
-  mCRPC_newdx_wilcox_pval[i] <- wilcox.test(
-    x = as.numeric(median_subset[i, patient_key$stage == "mCRPC"]),
-    y = as.numeric(median_subset[i, patient_key$stage == "new_dx"]),
-    alternative = "two.sided", exact = F, conf.level = .95
-  )$'p.value'
-  nmCRPC_newdx_wilcox_pval[i] <- wilcox.test(
-    x = as.numeric(median_subset[i, patient_key$stage == "nmCRPC"]),
-    y = as.numeric(median_subset[i, patient_key$stage == "new_dx"]),
-    alternative = "two.sided", exact = F, conf.level = .95
-  )$'p.value'
-  mCRPC_nmCSPC_wilcox_pval[i] <- wilcox.test(
-    x = as.numeric(median_subset[i, patient_key$stage == "mCRPC"]),
-    y = as.numeric(median_subset[i, patient_key$stage == "nmCSPC"]),
-    alternative = "two.sided", exact = F, conf.level = .95
-  )$'p.value'
+  # mCRPC_normal_wilcox_pval[i] <- wilcox.test(
+  #   x = as.numeric(median_subset[i, patient_key$stage == "mCRPC"]),
+  #   y = as.numeric(median_subset[i, patient_key$stage == "normal"]),
+  #   alternative = "two.sided", exact = F, conf.level = .95
+  # )$'p.value'
+  # nmCRPC_normal_wilcox_pval[i] <- wilcox.test(
+  #   x = as.numeric(median_subset[i, patient_key$stage == "nmCRPC"]),
+  #   y = as.numeric(median_subset[i, patient_key$stage == "normal"]),
+  #   alternative = "two.sided", exact = F, conf.level = .95
+  # )$'p.value'
+  # nmCSPC_normal_wilcox_pval[i] <- wilcox.test(
+  #   x = as.numeric(median_subset[i, patient_key$stage == "nmCSPC"]),
+  #   y = as.numeric(median_subset[i, patient_key$stage == "normal"]),
+  #   alternative = "two.sided", exact = F, conf.level = .95
+  # )$'p.value'
+  # mCRPC_newdx_wilcox_pval[i] <- wilcox.test(
+  #   x = as.numeric(median_subset[i, patient_key$stage == "mCRPC"]),
+  #   y = as.numeric(median_subset[i, patient_key$stage == "new_dx"]),
+  #   alternative = "two.sided", exact = F, conf.level = .95
+  # )$'p.value'
+  # nmCRPC_newdx_wilcox_pval[i] <- wilcox.test(
+  #   x = as.numeric(median_subset[i, patient_key$stage == "nmCRPC"]),
+  #   y = as.numeric(median_subset[i, patient_key$stage == "new_dx"]),
+  #   alternative = "two.sided", exact = F, conf.level = .95
+  # )$'p.value'
+  # mCRPC_nmCSPC_wilcox_pval[i] <- wilcox.test(
+  #   x = as.numeric(median_subset[i, patient_key$stage == "mCRPC"]),
+  #   y = as.numeric(median_subset[i, patient_key$stage == "nmCSPC"]),
+  #   alternative = "two.sided", exact = F, conf.level = .95
+  # )$'p.value'
   
   print(i)
 }
@@ -801,12 +897,12 @@ hist(newdx_normal_wilcox_pval, breaks = 70)
 hist(cancer_normal_wilcox_pval, breaks = 70)
 hist(mCRPC_others_wilcox_pval, breaks = 70)
 
-hist(mCRPC_normal_wilcox_pval, breaks = 70)
-hist(nmCRPC_normal_wilcox_pval, breaks = 70)
-hist(nmCSPC_normal_wilcox_pval, breaks = 70)
-hist(mCRPC_newdx_wilcox_pval, breaks = 70)
-hist(nmCRPC_newdx_wilcox_pval, breaks = 70)
-hist(mCRPC_nmCSPC_wilcox_pval, breaks = 70)
+# hist(mCRPC_normal_wilcox_pval, breaks = 70)
+# hist(nmCRPC_normal_wilcox_pval, breaks = 70)
+# hist(nmCSPC_normal_wilcox_pval, breaks = 70)
+# hist(mCRPC_newdx_wilcox_pval, breaks = 70)
+# hist(nmCRPC_newdx_wilcox_pval, breaks = 70)
+# hist(mCRPC_nmCSPC_wilcox_pval, breaks = 70)
 
 # get BH-corrected pval (restricted to signif peptides from ANOVA)
 mCRPC_nmCRPC_wilcox_BH <- p.adjust(mCRPC_nmCRPC_wilcox_pval, method = "BH")
@@ -816,12 +912,12 @@ newdx_normal_wilcox_BH <- p.adjust(newdx_normal_wilcox_pval, method = "BH")
 cancer_normal_wilcox_BH <- p.adjust(cancer_normal_wilcox_pval, method = "BH")
 mCRPC_others_wilcox_BH <- p.adjust(mCRPC_others_wilcox_pval, method = "BH")
 
-mCRPC_normal_wilcox_BH <- p.adjust(mCRPC_normal_wilcox_pval, method = "BH")
-nmCRPC_normal_wilcox_BH <- p.adjust(nmCRPC_normal_wilcox_pval, method = "BH")
-nmCSPC_normal_wilcox_BH <- p.adjust(nmCSPC_normal_wilcox_pval, method = "BH")
-mCRPC_newdx_wilcox_BH <- p.adjust(mCRPC_newdx_wilcox_pval, method = "BH")
-nmCRPC_newdx_wilcox_BH <- p.adjust(nmCRPC_newdx_wilcox_pval, method = "BH")
-mCRPC_nmCSPC_wilcox_BH <- p.adjust(mCRPC_nmCSPC_wilcox_pval, method = "BH")
+# mCRPC_normal_wilcox_BH <- p.adjust(mCRPC_normal_wilcox_pval, method = "BH")
+# nmCRPC_normal_wilcox_BH <- p.adjust(nmCRPC_normal_wilcox_pval, method = "BH")
+# nmCSPC_normal_wilcox_BH <- p.adjust(nmCSPC_normal_wilcox_pval, method = "BH")
+# mCRPC_newdx_wilcox_BH <- p.adjust(mCRPC_newdx_wilcox_pval, method = "BH")
+# nmCRPC_newdx_wilcox_BH <- p.adjust(nmCRPC_newdx_wilcox_pval, method = "BH")
+# mCRPC_nmCSPC_wilcox_BH <- p.adjust(mCRPC_nmCSPC_wilcox_pval, method = "BH")
 
 # check peptide counts at different BH FDR thresholds
 count.func(mCRPC_nmCRPC_wilcox_BH, seq(0.03, 0.15, by = 0.01))
@@ -831,12 +927,12 @@ count.func(newdx_normal_wilcox_BH, seq(0.03, 0.15, by = 0.01))
 count.func(cancer_normal_wilcox_BH, seq(0.03, 0.15, by = 0.01))
 count.func(mCRPC_others_wilcox_BH, seq(0.03, 0.15, by = 0.01))
 
-count.func(mCRPC_normal_wilcox_BH, seq(0.03, 0.15, by = 0.01)) 
-count.func(nmCRPC_normal_wilcox_BH , seq(0.03, 0.15, by = 0.01))
-count.func(nmCSPC_normal_wilcox_BH , seq(0.03, 0.15, by = 0.01))
-count.func(mCRPC_newdx_wilcox_BH , seq(0.03, 0.15, by = 0.01))
-count.func(nmCRPC_newdx_wilcox_BH , seq(0.03, 0.15, by = 0.01))
-count.func(mCRPC_nmCSPC_wilcox_BH , seq(0.03, 0.15, by = 0.01))
+# count.func(mCRPC_normal_wilcox_BH, seq(0.03, 0.15, by = 0.01)) 
+# count.func(nmCRPC_normal_wilcox_BH , seq(0.03, 0.15, by = 0.01))
+# count.func(nmCSPC_normal_wilcox_BH , seq(0.03, 0.15, by = 0.01))
+# count.func(mCRPC_newdx_wilcox_BH , seq(0.03, 0.15, by = 0.01))
+# count.func(nmCRPC_newdx_wilcox_BH , seq(0.03, 0.15, by = 0.01))
+# count.func(mCRPC_nmCSPC_wilcox_BH , seq(0.03, 0.15, by = 0.01))
 
 # check how many peptides meet BH-FDR & effect-size thresholds for particular contrast
 length(which(abs(mCRPC_mean - nmCRPC_mean) > 1 & mCRPC_nmCRPC_wilcox_BH <= 0.05))
@@ -846,12 +942,12 @@ length(which(abs(newdx_mean - normal_mean) > 1 & newdx_normal_wilcox_BH<= 0.05))
 length(which(abs(cancer_mean - normal_mean) > 1 & cancer_normal_wilcox_BH <= 0.05))
 length(which(abs(mCRPC_mean - NOT_mCRPC_mean) > 1 & mCRPC_others_wilcox_BH <= 0.05))
 
-length(which(abs(mCRPC_mean - normal_mean) > 1 & mCRPC_normal_wilcox_BH <= 0.05))
-length(which(abs(nmCRPC_mean - normal_mean) > 1 & nmCRPC_normal_wilcox_BH <= 0.05))
-length(which(abs(nmCSPC_mean - normal_mean) > 1 & nmCSPC_normal_wilcox_BH <= 0.05))
-length(which(abs(mCRPC_mean - newdx_mean) > 1 & mCRPC_newdx_wilcox_BH <= 0.05))
-length(which(abs(nmCRPC_mean - newdx_mean) > 1 & nmCRPC_newdx_wilcox_BH <= 0.05))
-length(which(abs(mCRPC_mean - nmCSPC_mean) > 1 & mCRPC_nmCSPC_wilcox_BH <= 0.05))
+# length(which(abs(mCRPC_mean - normal_mean) > 1 & mCRPC_normal_wilcox_BH <= 0.05))
+# length(which(abs(nmCRPC_mean - normal_mean) > 1 & nmCRPC_normal_wilcox_BH <= 0.05))
+# length(which(abs(nmCSPC_mean - normal_mean) > 1 & nmCSPC_normal_wilcox_BH <= 0.05))
+# length(which(abs(mCRPC_mean - newdx_mean) > 1 & mCRPC_newdx_wilcox_BH <= 0.05))
+# length(which(abs(nmCRPC_mean - newdx_mean) > 1 & nmCRPC_newdx_wilcox_BH <= 0.05))
+# length(which(abs(mCRPC_mean - nmCSPC_mean) > 1 & mCRPC_nmCSPC_wilcox_BH <= 0.05))
 
 
 #----------------------------------------------------------------------------------------------
@@ -875,12 +971,12 @@ newdx_normal_tstat <- (newdx_mean - normal_mean) / sqrt(BH_filter_mse * (1/newdx
 cancer_normal_tstat <- (cancer_mean - normal_mean) / sqrt(BH_filter_mse * (1/cancer_counts + 1/normal_counts))
 mCRPC_others_tstat <- (mCRPC_mean - NOT_mCRPC_mean) / sqrt(BH_filter_mse * (1/mCRPC_counts + 1/NOT_mCRPC_counts))
 
-mCRPC_normal_tstat <- (mCRPC_mean - normal_mean) / sqrt(BH_filter_mse * (1/mCRPC_counts + 1/normal_counts))
-nmCRPC_normal_tstat <- (nmCRPC_mean - normal_mean) / sqrt(BH_filter_mse * (1/nmCRPC_counts + 1/normal_counts))
-nmCSPC_normal_tstat <- (nmCSPC_mean - normal_mean) / sqrt(BH_filter_mse * (1/nmCSPC_counts + 1/normal_counts))
-mCRPC_newdx_tstat <- (mCRPC_mean - newdx_mean) / sqrt(BH_filter_mse * (1/mCRPC_counts + 1/newdx_counts))
-nmCRPC_newdx_tstat <- (nmCRPC_mean - newdx_mean) / sqrt(BH_filter_mse * (1/nmCRPC_counts + 1/newdx_counts))
-mCRPC_nmCSPC_tstat <- (mCRPC_mean - nmCSPC_mean) / sqrt(BH_filter_mse * (1/mCRPC_counts + 1/nmCSPC_counts))
+# mCRPC_normal_tstat <- (mCRPC_mean - normal_mean) / sqrt(BH_filter_mse * (1/mCRPC_counts + 1/normal_counts))
+# nmCRPC_normal_tstat <- (nmCRPC_mean - normal_mean) / sqrt(BH_filter_mse * (1/nmCRPC_counts + 1/normal_counts))
+# nmCSPC_normal_tstat <- (nmCSPC_mean - normal_mean) / sqrt(BH_filter_mse * (1/nmCSPC_counts + 1/normal_counts))
+# mCRPC_newdx_tstat <- (mCRPC_mean - newdx_mean) / sqrt(BH_filter_mse * (1/mCRPC_counts + 1/newdx_counts))
+# nmCRPC_newdx_tstat <- (nmCRPC_mean - newdx_mean) / sqrt(BH_filter_mse * (1/nmCRPC_counts + 1/newdx_counts))
+# mCRPC_nmCSPC_tstat <- (mCRPC_mean - nmCSPC_mean) / sqrt(BH_filter_mse * (1/mCRPC_counts + 1/nmCSPC_counts))
 
 # get tstat-pval (two-sided)
 mCRPC_nmCRPC_pval <- 2 * pt( -abs(mCRPC_nmCRPC_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
@@ -890,12 +986,12 @@ newdx_normal_pval <- 2 * pt( -abs(newdx_normal_tstat), df = nrow(patient_key) - 
 cancer_normal_pval <- 2 * pt( -abs(cancer_normal_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
 mCRPC_others_pval <- 2 * pt( -abs(mCRPC_others_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
 
-mCRPC_normal_pval <-2 * pt( -abs(mCRPC_normal_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
-nmCRPC_normal_pval <- 2 * pt( -abs(nmCRPC_normal_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
-nmCSPC_normal_pval <- 2 * pt( -abs(nmCSPC_normal_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
-mCRPC_newdx_pval <- 2 * pt( -abs(mCRPC_newdx_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
-nmCRPC_newdx_pval <- 2 * pt( -abs(nmCRPC_newdx_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
-mCRPC_nmCSPC_pval <- 2 * pt( -abs(mCRPC_nmCSPC_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
+# mCRPC_normal_pval <-2 * pt( -abs(mCRPC_normal_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
+# nmCRPC_normal_pval <- 2 * pt( -abs(nmCRPC_normal_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
+# nmCSPC_normal_pval <- 2 * pt( -abs(nmCSPC_normal_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
+# mCRPC_newdx_pval <- 2 * pt( -abs(mCRPC_newdx_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
+# nmCRPC_newdx_pval <- 2 * pt( -abs(nmCRPC_newdx_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
+# mCRPC_nmCSPC_pval <- 2 * pt( -abs(mCRPC_nmCSPC_tstat), df = nrow(patient_key) - length(unique(patient_key$stage)) )
 
 # check pval histograms (restricted to signif peptides from ANOVA)
 hist(mCRPC_nmCRPC_pval, breaks = 70)
@@ -920,12 +1016,12 @@ newdx_normal_BH <- p.adjust(newdx_normal_pval, method = "BH")
 cancer_normal_BH <- p.adjust(cancer_normal_pval, method = "BH")
 mCRPC_others_BH <- p.adjust(mCRPC_others_pval, method = "BH")
 
-mCRPC_normal_BH <- p.adjust(mCRPC_normal_pval, method = "BH")
-nmCRPC_normal_BH <- p.adjust(nmCRPC_normal_pval, method = "BH")
-nmCSPC_normal_BH <- p.adjust(nmCSPC_normal_pval, method = "BH")
-mCRPC_newdx_BH <- p.adjust(mCRPC_newdx_pval, method = "BH")
-nmCRPC_newdx_BH <- p.adjust(nmCRPC_newdx_pval, method = "BH")
-mCRPC_nmCSPC_BH <- p.adjust(mCRPC_nmCSPC_pval, method = "BH")
+# mCRPC_normal_BH <- p.adjust(mCRPC_normal_pval, method = "BH")
+# nmCRPC_normal_BH <- p.adjust(nmCRPC_normal_pval, method = "BH")
+# nmCSPC_normal_BH <- p.adjust(nmCSPC_normal_pval, method = "BH")
+# mCRPC_newdx_BH <- p.adjust(mCRPC_newdx_pval, method = "BH")
+# nmCRPC_newdx_BH <- p.adjust(nmCRPC_newdx_pval, method = "BH")
+# mCRPC_nmCSPC_BH <- p.adjust(mCRPC_nmCSPC_pval, method = "BH")
 
 # check peptide counts at different BH FDR thresholds
 count.func(mCRPC_nmCRPC_BH, seq(0.03, 0.15, by = 0.01))
@@ -935,12 +1031,12 @@ count.func(newdx_normal_BH, seq(0.03, 0.15, by = 0.01))
 count.func(cancer_normal_BH, seq(0.03, 0.15, by = 0.01))
 count.func(mCRPC_others_BH, seq(0.03, 0.15, by = 0.01))
 
-count.func(mCRPC_normal_BH, seq(0.03, 0.15, by = 0.01))
-count.func(nmCRPC_normal_BH, seq(0.03, 0.15, by = 0.01))
-count.func(nmCSPC_normal_BH, seq(0.03, 0.15, by = 0.01))
-count.func(mCRPC_newdx_BH , seq(0.03, 0.15, by = 0.01))
-count.func(nmCRPC_newdx_BH, seq(0.03, 0.15, by = 0.01))
-count.func(mCRPC_nmCSPC_BH, seq(0.03, 0.15, by = 0.01))
+# count.func(mCRPC_normal_BH, seq(0.03, 0.15, by = 0.01))
+# count.func(nmCRPC_normal_BH, seq(0.03, 0.15, by = 0.01))
+# count.func(nmCSPC_normal_BH, seq(0.03, 0.15, by = 0.01))
+# count.func(mCRPC_newdx_BH , seq(0.03, 0.15, by = 0.01))
+# count.func(nmCRPC_newdx_BH, seq(0.03, 0.15, by = 0.01))
+# count.func(mCRPC_nmCSPC_BH, seq(0.03, 0.15, by = 0.01))
 
 # check how many peptides meet BH-FDR & effect-size thresholds for particular contrast
 length(which(abs(mCRPC_mean - nmCRPC_mean) > 1 & mCRPC_nmCRPC_BH <= 0.05))
@@ -950,12 +1046,33 @@ length(which(abs(newdx_mean - normal_mean) > 1 & newdx_normal_BH<= 0.05))
 length(which(abs(cancer_mean - normal_mean) > 1 & cancer_normal_BH <= 0.05))
 length(which(abs(mCRPC_mean - NOT_mCRPC_mean) > 1 & mCRPC_others_BH <= 0.05))
 
-length(which(abs(mCRPC_mean - normal_mean) > 1 & mCRPC_normal_BH <= 0.05))
-length(which(abs(nmCRPC_mean - normal_mean) > 1 & nmCRPC_normal_BH <= 0.05))
-length(which(abs(nmCSPC_mean - normal_mean) > 1 & nmCSPC_normal_BH <= 0.05))
-length(which(abs(mCRPC_mean - newdx_mean) > 1 & mCRPC_newdx_BH <= 0.05))
-length(which(abs(nmCRPC_mean - newdx_mean) > 1 & nmCRPC_newdx_BH <= 0.05))
-length(which(abs(mCRPC_mean - nmCSPC_mean) > 1 & mCRPC_nmCSPC_BH <= 0.05))
+# length(which(abs(mCRPC_mean - normal_mean) > 1 & mCRPC_normal_BH <= 0.05))
+# length(which(abs(nmCRPC_mean - normal_mean) > 1 & nmCRPC_normal_BH <= 0.05))
+# length(which(abs(nmCSPC_mean - normal_mean) > 1 & nmCSPC_normal_BH <= 0.05))
+# length(which(abs(mCRPC_mean - newdx_mean) > 1 & mCRPC_newdx_BH <= 0.05))
+# length(which(abs(nmCRPC_mean - newdx_mean) > 1 & nmCRPC_newdx_BH <= 0.05))
+# length(which(abs(mCRPC_mean - nmCSPC_mean) > 1 & mCRPC_nmCSPC_BH <= 0.05))
+
+#----------------------------------------------------------------------------------------------
+# volcano plots of contrasts
+
+# make sure contrast_diff and contrast_pval and contrast_BH of same length !!
+contrast_volcano_plot.func <- function(contrast_diff, contrast_pval, contrast_BH, test_type, measure, contrast_title){
+  plot(x = contrast_diff, y = -log10(contrast_pval), pch = 20,
+       xlab = paste0("difference of ", measure, " log2(fluorescence)"), 
+       ylab = paste0("-log10(contrast ",test_type, " p-values)"),
+       main = paste0("Volcano plot of contrast: ", contrast_title))
+  lines(x = contrast_diff[ contrast_BH <= .05 & abs(contrast_diff) >= 1 ], 
+        y = -log10(contrast_pval[ contrast_BH <= .05 & abs(contrast_diff) >= 1]),
+        type = "p", pch = 20, col = "blue")
+}
+
+contrast_volcano_plot.func(mCRPC_median - NOT_mCRPC_median, 
+                           mCRPC_others_wilcox_pval, 
+                           mCRPC_others_wilcox_BH, 
+                           "Wilcoxon test",
+                           "median",
+                           "mCRPC vs others")
 
 #----------------------------------------------------------------------------------------------
 # Write to Excel
@@ -1195,6 +1312,63 @@ dev.off()
 #----------------------------------------------------------------------------------------------
 # replot subset of ANOVA residual heatmap based on effect-size threshold from post-hoc analysis
 
+posthoc_signif_crit <- ( abs(mCRPC_median - nmCRPC_median) > 1 & mCRPC_nmCRPC_wilcox_BH <= 0.05 ) |
+( abs(nmCRPC_median - nmCSPC_median) > 1 & nmCRPC_nmCSPC_wilcox_BH <= 0.05 ) |
+( abs(nmCSPC_median - newdx_median) > 1 & nmCSPC_newdx_wilcox_BH <= 0.05 ) |
+( abs(newdx_median - normal_median) > 1 & newdx_normal_wilcox_BH<= 0.05 ) |
+( abs(cancer_median - normal_median) > 1 & cancer_normal_wilcox_BH <= 0.05 ) |
+( abs(mCRPC_median - NOT_mCRPC_median) > 1 & mCRPC_others_wilcox_BH <= 0.05 )
+
+# check
+length(posthoc_signif_crit)
+
+anova_dat <- raw_data_median %>% 
+  select(PROBE_ID, any_of(patient_key$id)) %>% 
+  mutate(anova_BH = all_anova$anova_BH[raw_data_median$PROBE_ID]) %>%
+  # mutate(anova_BH = all_kw$anova_BH[raw_data_median$PROBE_ID]) %>%
+  filter(anova_BH <= .05) %>%
+  select(-anova_BH) %>%
+  filter(posthoc_signif_crit)
+
+anova_dat_demean <- sweep(as.matrix(anova_dat %>% select(-PROBE_ID)), 1, 
+                          rowMeans(as.matrix(anova_dat %>% select(-PROBE_ID))), "-") # centering by row
+
+# make sure stage aligns with anova_dat_demean
+visual_iii <- match( colnames(anova_dat_demean) , patient_key$id )
+visual_stage <- patient_key$stage[visual_iii]
+
+# colors and shapes for the visualization techniques
+cols = pal[ match(visual_stage, names(pal)) ]
+cls <- colorRampPalette(c("navy", "honeydew", "firebrick3", "brown"))(n = 1024)
+
+get_column_order.func <- function(stages){
+  heat_map <- heatmap3(anova_dat_demean[,visual_stage == stages],col = cls, labRow = "")
+  return( colnames(anova_dat_demean[,visual_stage == stages])[heat_map$colInd] )
+}
+
+normal_id_order <- get_column_order.func("normal")
+newdx_id_order <- get_column_order.func("new_dx")
+nmCSPC_id_order <- get_column_order.func("nmCSPC")
+nmCRPC_id_order <- get_column_order.func("nmCRPC")
+mCRPC_id_order <- get_column_order.func("mCRPC")
+
+id_order <- match( c(normal_id_order, newdx_id_order, nmCSPC_id_order, nmCRPC_id_order, mCRPC_id_order),
+                   colnames(anova_dat_demean) )
+
+heatmap3(anova_dat_demean[,id_order], 
+         col = cls, # specify colors 
+         ColSideColors = cols[id_order], # specify patient color code
+         Colv = NA,
+         labCol = visual_stage[id_order], # specify patient
+         ColSideLabs = "stages", 
+         labRow = "",
+         xlab = "Patients",
+         # legendfun=function() showLegend(col = c("navy", "cornflowerblue", "turquoise1", "darkorange1", "firebrick1"),
+         #                                 legend = c("normal",  "new_dx", "nmCSPC", "nmCRPC", "mCRPC"),
+         #                                 cex = 1.2,
+         #                                 lwd = 5  )
+)
+
 
 
 #----------------------------------------------------------------------------------------------
@@ -1203,6 +1377,7 @@ dev.off()
 # save(logreg_pval,
 #      lmer_result,
 #      all_anova_pval,
+#      all_kw_pval,
 #      all_anova_mse,
 #      file = "07_Cancer_Stage_Effects.RData")
 
