@@ -345,21 +345,21 @@ ADT_Ftest_Satterthwaite_BH <- p.adjust(ADT_result[,"ADT_Satterthwaite_Ftest_pval
 
 png("08_pvalues_density_histograms.png", width = 1024, height = 1024)
 par(mfrow=c(2,2))
-hist(PAP_result[,"PAP_KR_Ftest_pval"], breaks=100, freq = F,
+hist(PAP_result[,"PAP_KR_Ftest_pval"], breaks=100, freq = F, ylim = c(0,32),
      main = "PAP's (KR F-test) p-values density histogram")
 text(x=.7, y=20, paste0(sum(as.numeric(PAP_Ftest_KR_BH <= .01))," peptides at 1% BH FDR"), cex = 1)
 
-hist(PAP_result[,"PAP_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
+hist(PAP_result[,"PAP_Satterthwaite_Ftest_pval"], breaks=100, freq = F,ylim = c(0,32),
      main = "PAP's (Satterthwaite F-test) p-values density histogram ")
 text(x=.7, y=20, paste0(sum(as.numeric(PAP_Ftest_Satterthwaite_BH <= .01))," peptides at 1% BH FDR"), cex = 1)
 
-hist(ADT_result[,"ADT_KR_Ftest_pval"], breaks=100, freq = F,
+hist(ADT_result[,"ADT_KR_Ftest_pval"], breaks=100, freq = F,ylim = c(0,32),
      main = "ADT's (KR F-test) p-values density histogram ")
-text(x=.7, y=1.3, "No signif peptides at 20% BH FDR", cex = 1)
+text(x=.7, y=20, "No signif peptides at 20% BH FDR", cex = 1)
 
-hist(ADT_result[,"ADT_Satterthwaite_Ftest_pval"], breaks=100, freq = F,
+hist(ADT_result[,"ADT_Satterthwaite_Ftest_pval"], breaks=100, freq = F,ylim = c(0,32),
      main = "ADT's (Satterthwaite F-test) p-values density histogram ")
-text(x=.7, y=1.3, "No signif peptides at 20% BH FDR", cex = 1)
+text(x=.7, y=20, "No signif peptides at 20% BH FDR", cex = 1)
 dev.off()
 
 # BH threshold peptide counts
@@ -370,7 +370,7 @@ count.func(ADT_Ftest_Satterthwaite_BH, seq(.63,.7,by=.01))
 
 # volcano plot (might be useful in setting initial values to estimate f0 in locfdr)
 volcano_plot.func <- function(time_effect, pval, BH, title){
-  plot(x = time_effect, y = -log10(pval), pch = ".",
+  plot(x = time_effect, y = -log10(pval), pch = ".", ylim = c(0,12.5), xlim = c(-.4, .85),
        xlab = "coefficient of time fixed effect", ylab = "-log10(F-test p-values)",
        main = title)
   lines(x = time_effect[ BH <= .01 & time_effect >= .3333 ], 
