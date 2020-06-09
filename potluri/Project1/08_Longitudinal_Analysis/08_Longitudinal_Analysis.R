@@ -473,30 +473,34 @@ count.func(locFDR_ADT_Satterthwaite, seq(.01,.1,by=.01))
 
 png("08_locFDR_plots.png", width = 1024, height = 1024)
 par(mfrow=c(2,2))
-locfdr(PAP_result[,"PAP_zval_1sided_KR"], 
+locFDR_PAP_KR <- locfdr(PAP_result[,"PAP_zval_1sided_KR"], 
        df = 17, # to fit estimated f(z) ,
+       # nulltype = 0, # use theoretical null
        mlests = c(-2, 1.8),
        main = "PAP's locFDR based on LMER t-stat 1-sided pval \nwith KR-adjusted df")
-text(x = 3, y = 3000, paste0(sum(as.numeric(locFDR_PAP_KR <= .01)), " peptides at 1% locFDR"), cex = 1)
+text(x = 3, y = 3000, paste0(sum(as.numeric(locFDR_PAP_KR$fdr <= .01)), " peptides at 1% locFDR"), cex = 1)
 
-locfdr(PAP_result[,"PAP_zval_1sided_Satterthwaite"], 
+locFDR_PAP_Satterthwaite <- locfdr(PAP_result[,"PAP_zval_1sided_Satterthwaite"], 
        df = 14,  # to fit estimated f(z) 
+       # nulltype = 0, # use theoretical null
        # mlests = c(-1.627, 1.378), # initial value for mean & sd of estimating f(0)
        mlests = c(-2, 1.4), # initial value for mean & sd of estimating f(0)
        main = "PAP's locFDR based on LMER t-stat 1-sided pval \nwith Satterthwaite-adjusted df")
-text(x = 2.5, y = 3000, paste0(sum(as.numeric(locFDR_PAP_Satterthwaite <= .01)), " peptides at 1% locFDR"), cex = 1)
+text(x = 3, y = 3000, paste0(sum(as.numeric(locFDR_PAP_Satterthwaite$fdr <= .01)), " peptides at 1% locFDR"), cex = 1)
 
-locfdr(ADT_result[,"ADT_zval_1sided_KR"], 
+locFDR_ADT_KR <- locfdr(ADT_result[,"ADT_zval_1sided_KR"], 
        df = 10, # to fit estimated f(z) 
-       mlests = c(-1.5,1), # initial value for mean & sd of estimating f(0)
+       nulltype = 0, # use theoretical null
+       # mlests = c(-1.5,1), # initial value for mean & sd of estimating f(0)
        # mlests = c(.05,2.3), # initial value for mean & sd of estimating f(0)
        main = "ADT's locFDR based on LMER t-stat 1-sided pval \nwith KR-adjusted df")
-text(x = 3, y = 2500, paste0(sum(as.numeric(locFDR_ADT_KR <= .01)), " peptides at 1% locFDR"), cex = 1)
+text(x = 3, y = 2500, paste0(sum(as.numeric(locFDR_ADT_KR$fdr <= .01)), " peptides at 1% locFDR"), cex = 1)
 
-locfdr(ADT_result[,"ADT_zval_1sided_Satterthwaite"], 
+locFDR_ADT_Satterthwaite <- locfdr(ADT_result[,"ADT_zval_1sided_Satterthwaite"], 
        df = 10, # to fit estimated f(z) 
-       mlests = c(-1.5,1), # initial value for mean & sd of estimating f(0)
+       nulltype = 0, # use theoretical null
+       # mlests = c(-1.5,1), # initial value for mean & sd of estimating f(0)
        # mlests = c(.05,2.3), # initial value for mean & sd of estimating f(0)
        main = "ADT's locFDR based on LMER t-stat 1-sided pval \nwith Satterthwaite-adjusted df")
-text(x = 3, y = 3000, paste0(sum(as.numeric(locFDR_ADT_Satterthwaite <= .01)), " peptides at 1% locFDR"), cex = 1)
+text(x = 3, y = 3000, paste0(sum(as.numeric(locFDR_ADT_Satterthwaite$fdr <= .01)), " peptides at 1% locFDR"), cex = 1)
 dev.off()
