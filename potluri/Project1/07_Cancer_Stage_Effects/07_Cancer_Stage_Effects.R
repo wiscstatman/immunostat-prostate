@@ -6,6 +6,7 @@ library(Rtsne)
 library(heatmap3)
 library(ggplot2)
 library(matrixStats) #rowMedians
+library(dunn.test)
 library(tidyverse) # make sure you have the latest tidyverse !
 library(xlsx)
 
@@ -757,6 +758,9 @@ allez.tab <- allez.tab %>% dplyr::select(-c(in.set, genes)) %>%
 # first make sure stage aligns with raw_data_median
 sum(as.numeric(colnames(raw_data_median %>% select(-(PROBE_DESIGN_ID:DESIGN_ID))) == patient_key$id)) == nrow(patient_key)
 
+# set BH FDR cutoff
+BH_FDR_cutoff <- .05
+
 # next get group means
 group_means.func <- function(group, BH_filter){
   raw_data_median %>% 
@@ -766,13 +770,13 @@ group_means.func <- function(group, BH_filter){
     # filter(all_kw$anova_BH <= BH_filter) %>%
     rowMeans() 
 }
-mCRPC_mean <- group_means.func("mCRPC", .05)
-nmCRPC_mean <- group_means.func("nmCRPC", .05)
-nmCSPC_mean <- group_means.func("nmCSPC", .05)
-newdx_mean <- group_means.func("new_dx", .05)
-normal_mean <- group_means.func("normal", .05)
-cancer_mean <- group_means.func(c("new_dx", "nmCSPC", "nmCRPC", "mCRPC"), .05)
-NOT_mCRPC_mean <- group_means.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"), .05)
+mCRPC_mean <- group_means.func("mCRPC", BH_FDR_cutoff)
+nmCRPC_mean <- group_means.func("nmCRPC", BH_FDR_cutoff)
+nmCSPC_mean <- group_means.func("nmCSPC", BH_FDR_cutoff)
+newdx_mean <- group_means.func("new_dx", BH_FDR_cutoff)
+normal_mean <- group_means.func("normal", BH_FDR_cutoff)
+cancer_mean <- group_means.func(c("new_dx", "nmCSPC", "nmCRPC", "mCRPC"), BH_FDR_cutoff)
+NOT_mCRPC_mean <- group_means.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"), BH_FDR_cutoff)
 
 # get group medians as well
 group_median.func <- function(group, BH_filter){
@@ -785,13 +789,13 @@ group_median.func <- function(group, BH_filter){
     as.matrix() %>%
     matrixStats::rowMedians() 
 }
-mCRPC_median <- group_median.func("mCRPC", .01)
-nmCRPC_median <- group_median.func("nmCRPC", .01)
-nmCSPC_median <- group_median.func("nmCSPC", .01)
-newdx_median <- group_median.func("new_dx", .01)
-normal_median <- group_median.func("normal", .01)
-cancer_median <- group_median.func(c("new_dx", "nmCSPC", "nmCRPC", "mCRPC"), .01)
-NOT_mCRPC_median <- group_median.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"), .01)
+mCRPC_median <- group_median.func("mCRPC", BH_FDR_cutoff)
+nmCRPC_median <- group_median.func("nmCRPC", BH_FDR_cutoff)
+nmCSPC_median <- group_median.func("nmCSPC", BH_FDR_cutoff)
+newdx_median <- group_median.func("new_dx", BH_FDR_cutoff)
+normal_median <- group_median.func("normal", BH_FDR_cutoff)
+cancer_median <- group_median.func(c("new_dx", "nmCSPC", "nmCRPC", "mCRPC"), BH_FDR_cutoff)
+NOT_mCRPC_median <- group_median.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"), BH_FDR_cutoff)
 
 
 # post-hoc analysis function
@@ -807,7 +811,7 @@ NOT_mCRPC_median <- group_median.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"),
 
 median_subset <- raw_data_median %>%
   # filter(all_anova$anova_BH <= .01) %>%
-  filter(all_kw$anova_BH <= .01) %>%  # change KW BH threshold here!
+  filter(all_kw$anova_BH <= BH_FDR_cutoff) %>%  # change KW BH threshold here!
   # filter((all_kw$anova_BH <= .01) & (all_anova$anova_BH <= .01)) %>%
   select(any_of(array_id_key$id)) %>%
   as.matrix()
@@ -940,12 +944,12 @@ count.func(mCRPC_others_wilcox_BH, seq(0.03, 0.15, by = 0.01))
 # count.func(mCRPC_nmCSPC_wilcox_BH , seq(0.03, 0.15, by = 0.01))
 
 # check how many peptides meet BH-FDR & effect-size thresholds for particular contrast
-length(which(abs(mCRPC_median - nmCRPC_median) > 1 & mCRPC_nmCRPC_wilcox_BH <= 0.01))
-length(which(abs(nmCRPC_median - nmCSPC_median) > 1 & nmCRPC_nmCSPC_wilcox_BH <= 0.01))
-length(which(abs(nmCSPC_median - newdx_median) > 1 & nmCSPC_newdx_wilcox_BH <= 0.01))
-length(which(abs(newdx_median - normal_median) > 1 & newdx_normal_wilcox_BH<= 0.01))
-length(which(abs(cancer_median - normal_median) > 1 & cancer_normal_wilcox_BH <= 0.01))
-length(which(abs(mCRPC_median - NOT_mCRPC_median) > 1 & mCRPC_others_wilcox_BH <= 0.01))
+length(which(abs(mCRPC_median - nmCRPC_median) > 1 & mCRPC_nmCRPC_wilcox_BH <= BH_FDR_cutoff))
+length(which(abs(nmCRPC_median - nmCSPC_median) > 1 & nmCRPC_nmCSPC_wilcox_BH <= BH_FDR_cutoff))
+length(which(abs(nmCSPC_median - newdx_median) > 1 & nmCSPC_newdx_wilcox_BH <= BH_FDR_cutoff))
+length(which(abs(newdx_median - normal_median) > 1 & newdx_normal_wilcox_BH<= BH_FDR_cutoff))
+length(which(abs(cancer_median - normal_median) > 1 & cancer_normal_wilcox_BH <= BH_FDR_cutoff))
+length(which(abs(mCRPC_median - NOT_mCRPC_median) > 1 & mCRPC_others_wilcox_BH <= BH_FDR_cutoff))
 
 # length(which(abs(mCRPC_mean - normal_mean) > 1 & mCRPC_normal_wilcox_BH <= 0.05))
 # length(which(abs(nmCRPC_mean - normal_mean) > 1 & nmCRPC_normal_wilcox_BH <= 0.05))
@@ -953,6 +957,63 @@ length(which(abs(mCRPC_median - NOT_mCRPC_median) > 1 & mCRPC_others_wilcox_BH <
 # length(which(abs(mCRPC_mean - newdx_mean) > 1 & mCRPC_newdx_wilcox_BH <= 0.05))
 # length(which(abs(nmCRPC_mean - newdx_mean) > 1 & nmCRPC_newdx_wilcox_BH <= 0.05))
 # length(which(abs(mCRPC_mean - nmCSPC_mean) > 1 & mCRPC_nmCSPC_wilcox_BH <= 0.05))
+
+#----------------------------------------------------------------------------------------------
+# just curious, check Dunn's Test
+
+mCRPC_nmCRPC_dunn_pval <- rep(NA, nrow(median_subset))
+nmCRPC_nmCSPC_dunn_pval <- rep(NA, nrow(median_subset))
+nmCSPC_newdx_dunn_pval <- rep(NA, nrow(median_subset))
+newdx_normal_dunn_pval <- rep(NA, nrow(median_subset))
+
+for(i in 1: nrow(median_subset)){
+  pairwise_dunn_test <- dunn.test(median_subset[i,], g = patient_key$stage, list = T, altp = T)
+  mCRPC_nmCRPC_dunn_pval[i] <- pairwise_dunn_test$altP[pairwise_dunn_test$comparisons == "mCRPC - nmCRPC"]
+  nmCRPC_nmCSPC_dunn_pval[i] <- pairwise_dunn_test$altP[pairwise_dunn_test$comparisons == "nmCRPC - nmCSPC"]
+  nmCSPC_newdx_dunn_pval[i] <- pairwise_dunn_test$altP[pairwise_dunn_test$comparisons == "new_dx - nmCSPC"]
+  newdx_normal_dunn_pval[i] <- pairwise_dunn_test$altP[pairwise_dunn_test$comparisons == "new_dx - normal"]
+  print(i)
+}
+
+# get BH-corrected pval (restricted to signif peptides from ANOVA)
+mCRPC_nmCRPC_dunn_BH <- p.adjust(mCRPC_nmCRPC_dunn_pval, method = "BH")
+nmCRPC_nmCSPC_dunn_BH <- p.adjust(nmCRPC_nmCSPC_dunn_pval, method = "BH")
+nmCSPC_newdx_dunn_BH <- p.adjust(nmCSPC_newdx_dunn_pval, method = "BH")
+newdx_normal_dunn_BH <- p.adjust(newdx_normal_dunn_pval, method = "BH")
+
+# compare Dunn's p-values to Wilcox p-values
+
+dunn_wilcox_plot.func <- function(wilcox_pval, dunn_pval, wilcox_BH, dunn_BH, diff_median, title){
+  plot(x = wilcox_pval, y = dunn_pval, pch = ".", main = title,
+       xlab = "Wilcox p-values", ylab = "Dunn p-values", xlim = c(0,1), ylim = c(0,1))
+  lines(x = wilcox_pval[wilcox_BH <= .05 & abs(diff_median) > 1], y = dunn_pval[wilcox_BH <= .05 & abs(diff_median) > 1], 
+        type = "p", pch = 20, col = "red")
+  lines(x = wilcox_pval[dunn_BH <= .05 & abs(diff_median) > 1], y = dunn_pval[dunn_BH <= .05 & abs(diff_median) > 1], 
+        type = "p", pch = 20, col = "blue")
+  lines(x = wilcox_pval[wilcox_BH <= .05 & dunn_BH <= .05 & abs(diff_median) > 1], 
+        y = dunn_pval[wilcox_BH <= .05 & dunn_BH <= .05 & abs(diff_median) > 1], 
+        type = "p", pch = 20, col = "green")
+  abline(a=0, b=1, lty = 2, lwd = 2, col = "grey")
+  legend('topleft', pch = 20, col=c("red","blue", "green"),
+         c("Wilcox-BH < .05 & abs(median diff) > 1", 
+           "Dunn-BH < .05 & abs(median diff) > 1", 
+           "both BH < .05 & abs(median diff) > 1"))
+  
+}
+
+dunn_wilcox_plot.func(mCRPC_nmCRPC_wilcox_pval, mCRPC_nmCRPC_dunn_pval, mCRPC_nmCRPC_wilcox_BH, mCRPC_nmCRPC_dunn_BH,
+                      mCRPC_median - nmCRPC_median, "mCRPC vs nmCRPC")
+dunn_wilcox_plot.func(nmCRPC_nmCSPC_wilcox_pval, nmCRPC_nmCSPC_dunn_pval, nmCRPC_nmCSPC_wilcox_BH, nmCRPC_nmCSPC_dunn_BH,
+                      nmCRPC_median - nmCSPC_median, "nmCRPC vs nmCSPC")
+dunn_wilcox_plot.func(nmCSPC_newdx_wilcox_pval, nmCSPC_newdx_dunn_pval, nmCSPC_newdx_wilcox_BH, nmCSPC_newdx_dunn_BH,
+                      nmCSPC_median - newdx_median, "nmCSPC vs newdx")
+dunn_wilcox_plot.func(newdx_normal_wilcox_pval, newdx_normal_dunn_pval, newdx_normal_wilcox_BH, newdx_normal_dunn_BH,
+                      newdx_median - normal_median, "newdx vs normal")
+
+length(which(abs(mCRPC_median - nmCRPC_median) > 1 & mCRPC_nmCRPC_dunn_BH <= BH_FDR_cutoff))
+length(which(abs(nmCRPC_median - nmCSPC_median) > 1 & nmCRPC_nmCSPC_dunn_BH <= BH_FDR_cutoff))
+length(which(abs(nmCSPC_median - newdx_median) > 1 & nmCSPC_newdx_dunn_BH <= BH_FDR_cutoff))
+length(which(abs(newdx_median - normal_median) > 1 & newdx_normal_dunn_BH<= BH_FDR_cutoff))
 
 
 #----------------------------------------------------------------------------------------------
@@ -1006,12 +1067,12 @@ hist(newdx_normal_pval, breaks = 70)
 hist(cancer_normal_pval, breaks = 70)
 hist(mCRPC_others_pval, breaks = 70)
 
-hist(mCRPC_normal_pval, breaks = 70)
-hist(nmCRPC_normal_pval, breaks = 70)
-hist(nmCSPC_normal_pval, breaks = 70)
-hist(mCRPC_newdx_pval, breaks = 70)
-hist(nmCRPC_newdx_pval, breaks = 70)
-hist(mCRPC_nmCSPC_pval, breaks = 70)
+# hist(mCRPC_normal_pval, breaks = 70)
+# hist(nmCRPC_normal_pval, breaks = 70)
+# hist(nmCSPC_normal_pval, breaks = 70)
+# hist(mCRPC_newdx_pval, breaks = 70)
+# hist(nmCRPC_newdx_pval, breaks = 70)
+# hist(mCRPC_nmCSPC_pval, breaks = 70)
 
 # get BH-corrected pval (restricted to signif peptides from ANOVA)
 mCRPC_nmCRPC_BH <- p.adjust(mCRPC_nmCRPC_pval, method = "BH")
