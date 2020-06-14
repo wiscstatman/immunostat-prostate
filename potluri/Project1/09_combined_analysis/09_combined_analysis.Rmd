@@ -1036,6 +1036,58 @@ heatmap3(proj2_resid_winsorize[,time_order],
 )
 ```
 
+We also provide boxplots of fluorescence of a few of these `r proj2_signif_count` peptides. 
+
+```{r, fig.height = 11, fig.width=12}
+pap_df <- data.frame(
+  PROBE_ID = raw_data_median_proj2$PROBE_ID[signif_crit_proj2],
+  SEQ_ID = raw_data_median_proj2$SEQ_ID[signif_crit_proj2],
+  Time_Effect = PAP_result[,"PAP_time_effect"][signif_crit_proj2],
+  KR_BH = PAP_Ftest_KR_BH[signif_crit_proj2],
+  Satterth_BH = PAP_Ftest_Satterthwaite_BH[signif_crit_proj2]
+) %>% 
+  mutate(BH_FDR = pmin(KR_BH, Satterth_BH),
+         BH_FDR = round(BH_FDR, 8), 
+         Time_Effect = round(Time_Effect, 4)) %>%
+  select(PROBE_ID, SEQ_ID, BH_FDR, Time_Effect) %>%
+  arrange(desc(Time_Effect))
+
+proj2_signif_boxplot_df <- raw_data_median_proj2 %>% 
+  select(PROBE_ID, contains("id:")) %>%
+  filter( PROBE_ID %in% pap_df$PROBE_ID[1:6] )
+
+proj2_signif_boxplot.func <- function(signif_mat, draw){
+  signif_mat2 <- signif_mat[,-1]
+  signif_df <- data.frame(
+    treatment = factor( toupper( substr(colnames(signif_mat2), 4,6) ) ),
+    time = factor( str_sub( colnames(signif_mat2), -1,-1 ) ), 
+    fluorescence = as.numeric(signif_mat2[draw,])
+  )
+  ggplot(signif_df, aes(x = time, y = fluorescence, fill = treatment)) +
+    geom_boxplot(width = 0.5, position=position_dodge2(width = 0.5)) +
+    labs(title = paste0("Boxplots of Fluorescence Levels for \nPeptide: ", 
+                        signif_mat$PROBE_ID[draw]), 
+         x = "Time", y = "log2 Median Fluorescence") +
+    scale_fill_manual(values=c("#F8766D", "#00BFC4")) +
+    ylim(c(2,13.2)) +
+    theme(panel.background = element_rect(fill = "grey90"),
+          panel.grid.major = element_line(color = "white"),
+          panel.grid.minor = element_line(color = "white"),
+          # legend.position = "bottom",
+          plot.title = element_text(hjust = 0.5))
+}
+
+grid.arrange(
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,1),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,2),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,3),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,4),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,5),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,6),
+  ncol = 2
+)
+```
+
 ## Gene-Set-Analysis
 
 # Conclusion

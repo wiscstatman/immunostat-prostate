@@ -1348,36 +1348,76 @@ heatmap3(proj2_resid_winsorize[,time_order],
                                          lwd = 5  )
 )
 
+#--------------------------------------------------------------------------------------------
+# longitudinal boxplots
+
+# get pap_df from Write to Excel code chunks
+proj2_signif_boxplot_df <- raw_data_median_proj2 %>% 
+  select(PROBE_ID, contains("id:")) %>%
+  filter( PROBE_ID %in% pap_df$PROBE_ID[1:6] )
+
+proj2_signif_boxplot.func <- function(signif_mat, draw){
+  signif_mat2 <- signif_mat[,-1]
+  signif_df <- data.frame(
+    treatment = factor( toupper( substr(colnames(signif_mat2), 4,6) ) ),
+    time = factor( str_sub( colnames(signif_mat2), -1,-1 ) ), 
+    fluorescence = as.numeric(signif_mat2[draw,])
+  )
+  ggplot(signif_df, aes(x = time, y = fluorescence, fill = treatment)) +
+    geom_boxplot(width = 0.5, position=position_dodge2(width = 0.5)) +
+    labs(title = paste0("Boxplots of Fluorescence Levels for \nPeptide: ", 
+                        signif_mat$PROBE_ID[draw]), 
+         x = "Time", y = "log2 Median Fluorescence") +
+    scale_fill_manual(values=c("#F8766D", "#00BFC4")) +
+    ylim(c(2,13.2)) +
+    theme(panel.background = element_rect(fill = "grey90"),
+          panel.grid.major = element_line(color = "white"),
+          panel.grid.minor = element_line(color = "white"),
+          # legend.position = "bottom",
+          plot.title = element_text(hjust = 0.5))
+}
+
+grid.arrange(
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,1),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,2),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,3),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,4),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,5),
+  proj2_signif_boxplot.func(proj2_signif_boxplot_df,6),
+  ncol = 2
+)
+
 ####################################################################################### 
-#                      Appendix -- Boxplot of interesting peptides                    #
+#                               Boxplot of interesting peptides                       #
 #######################################################################################
 
 # first make sure stage aligns with raw_data_median
-sum(as.numeric(colnames(raw_data_median %>% select(-(PROBE_DESIGN_ID:DESIGN_ID))) == patient_key$id)) == nrow(patient_key)
+sum(as.numeric(colnames(raw_data_median %>% select(-(PROBE_DESIGN_ID:DESIGN_ID))) == patient_key$id)) == 
+  nrow(patient_key)
 
 contrast_df.func <- function(contrast_BH, contrast_diff){
   df <- data.frame(
-    PROBE_ID = raw_data_median$PROBE_ID[all_anova$anova_BH <= .05][contrast_BH <= .05],
-    SEQ_ID = raw_data_median$SEQ_ID[all_anova$anova_BH <= .05][contrast_BH <= .05],
-    Effect_size = contrast_diff[contrast_BH <= .05],
-    ANOVA_BH_FDR = all_anova$anova_BH[all_anova$anova_BH <= .05][contrast_BH <= .05]
+    PROBE_ID = raw_data_median$PROBE_ID[all_kw$anova_BH <= BH_FDR_cutoff][contrast_BH <= BH_FDR_cutoff],
+    SEQ_ID = raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff][contrast_BH <= BH_FDR_cutoff],
+    Effect_size = contrast_diff[contrast_BH <= BH_FDR_cutoff],
+    KW_BH_FDR = all_kw$anova_BH[all_kw$anova_BH <= BH_FDR_cutoff][contrast_BH <= BH_FDR_cutoff]
   )
   df <- df %>% 
     filter(abs(Effect_size)>1) %>%
     arrange(desc(Effect_size)) %>%
     remove_rownames() %>%
     mutate(Effect_size = round(Effect_size, 4),
-           ANOVA_BH_FDR = round(ANOVA_BH_FDR, 4))
+           KW_BH_FDR = round(KW_BH_FDR, 4))
   return(df)
 }
 
 # based on wilcox test
-mCRPC_others_df <- contrast_df.func(mCRPC_others_wilcox_BH, mCRPC_mean - NOT_mCRPC_mean)
-cancer_normal_df <- contrast_df.func(cancer_normal_wilcox_BH, cancer_mean - normal_mean)
-mCRPC_nmCRPC_df <- contrast_df.func(mCRPC_nmCRPC_wilcox_BH, mCRPC_mean - nmCRPC_mean) 
-nmCRPC_nmCSPC_df <- contrast_df.func(nmCRPC_nmCSPC_wilcox_BH, nmCRPC_mean - nmCSPC_mean) 
-nmCSPC_newdx_df <- contrast_df.func(nmCSPC_newdx_wilcox_BH, nmCSPC_mean - newdx_mean) 
-newdx_normal_df <- contrast_df.func(newdx_normal_wilcox_BH, newdx_mean - normal_mean)
+mCRPC_others_df <- contrast_df.func(mCRPC_others_wilcox_BH, mCRPC_median - NOT_mCRPC_median)
+cancer_normal_df <- contrast_df.func(cancer_normal_wilcox_BH, cancer_median - normal_median)
+mCRPC_nmCRPC_df <- contrast_df.func(mCRPC_nmCRPC_wilcox_BH, mCRPC_median - nmCRPC_median) 
+nmCRPC_nmCSPC_df <- contrast_df.func(nmCRPC_nmCSPC_wilcox_BH, nmCRPC_median - nmCSPC_median) 
+nmCSPC_newdx_df <- contrast_df.func(nmCSPC_newdx_wilcox_BH, nmCSPC_median - newdx_median) 
+newdx_normal_df <- contrast_df.func(newdx_normal_wilcox_BH, newdx_median - normal_median)
 
 boxplot_func <- function(ref_df, grp1, grp2, draw, rename_grp1, rename_grp2, col = c("red", "blue")){
   mat <- raw_data_median %>%
@@ -1402,7 +1442,7 @@ boxplot_func <- function(ref_df, grp1, grp2, draw, rename_grp1, rename_grp2, col
     
 }
 
-png("07_1a_Cancer_higher_than_Normal.png", height = 1024, width = 512)
+png("09_1a_Cancer_higher_than_Normal.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=cancer_normal_df,grp1=c("new_dx","nmCSPC","nmCRPC","mCRPC"),grp2="normal",rename_grp1="cancer",draw=1)
 boxplot_func(ref_df=cancer_normal_df,grp1=c("new_dx","nmCSPC","nmCRPC","mCRPC"),grp2="normal",rename_grp1="cancer",draw=2)
@@ -1410,7 +1450,7 @@ boxplot_func(ref_df=cancer_normal_df,grp1=c("new_dx","nmCSPC","nmCRPC","mCRPC"),
 boxplot_func(ref_df=cancer_normal_df,grp1=c("new_dx","nmCSPC","nmCRPC","mCRPC"),grp2="normal",rename_grp1="cancer",draw=4)
 dev.off()
 
-png("07_1b_Normal_higher_than_Cancer.png", height = 1024, width = 512)
+png("09_1b_Normal_higher_than_Cancer.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=cancer_normal_df,grp1=c("new_dx","nmCSPC","nmCRPC","mCRPC"),grp2="normal",rename_grp1="cancer",draw=nrow(cancer_normal_df))
 boxplot_func(ref_df=cancer_normal_df,grp1=c("new_dx","nmCSPC","nmCRPC","mCRPC"),grp2="normal",rename_grp1="cancer",draw=nrow(cancer_normal_df)-1)
@@ -1418,7 +1458,7 @@ boxplot_func(ref_df=cancer_normal_df,grp1=c("new_dx","nmCSPC","nmCRPC","mCRPC"),
 boxplot_func(ref_df=cancer_normal_df,grp1=c("new_dx","nmCSPC","nmCRPC","mCRPC"),grp2="normal",rename_grp1="cancer",draw=nrow(cancer_normal_df)-3)
 dev.off()
 
-png("07_2a_mCRPC_higher_than_others.png", height = 1024, width = 512)
+png("09_2a_mCRPC_higher_than_others.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=mCRPC_others_df,grp1="mCRPC",grp2=c("new_dx","nmCSPC","nmCRPC","normal"),rename_grp2="others",draw=1)
 boxplot_func(ref_df=mCRPC_others_df,grp1="mCRPC",grp2=c("new_dx","nmCSPC","nmCRPC","normal"),rename_grp2="others",draw=2)
@@ -1426,7 +1466,7 @@ boxplot_func(ref_df=mCRPC_others_df,grp1="mCRPC",grp2=c("new_dx","nmCSPC","nmCRP
 boxplot_func(ref_df=mCRPC_others_df,grp1="mCRPC",grp2=c("new_dx","nmCSPC","nmCRPC","normal"),rename_grp2="others",draw=4)
 dev.off()
 
-png("07_2b_others_higher_than_mCRPC.png", height = 1024, width = 512)
+png("09_2b_others_higher_than_mCRPC.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=mCRPC_others_df,grp1="mCRPC",grp2=c("new_dx","nmCSPC","nmCRPC","normal"),rename_grp2="others",draw=nrow(mCRPC_others_df))
 boxplot_func(ref_df=mCRPC_others_df,grp1="mCRPC",grp2=c("new_dx","nmCSPC","nmCRPC","normal"),rename_grp2="others",draw=nrow(mCRPC_others_df)-1)
@@ -1434,7 +1474,7 @@ boxplot_func(ref_df=mCRPC_others_df,grp1="mCRPC",grp2=c("new_dx","nmCSPC","nmCRP
 boxplot_func(ref_df=mCRPC_others_df,grp1="mCRPC",grp2=c("new_dx","nmCSPC","nmCRPC","normal"),rename_grp2="others",draw=nrow(mCRPC_others_df)-3)
 dev.off()
 
-png("07_3a_Newdx_higher_than_Normal.png", height = 1024, width = 512)
+png("09_3a_Newdx_higher_than_Normal.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=newdx_normal_df,grp1="new_dx",grp2="normal",draw = 1)
 boxplot_func(ref_df=newdx_normal_df,grp1="new_dx",grp2="normal",draw = 2)
@@ -1442,7 +1482,7 @@ boxplot_func(ref_df=newdx_normal_df,grp1="new_dx",grp2="normal",draw = 3)
 boxplot_func(ref_df=newdx_normal_df,grp1="new_dx",grp2="normal",draw = 4)
 dev.off()
 
-png("07_3b_Normal_higher_than_Newdx.png", height = 1024, width = 512)
+png("09_3b_Normal_higher_than_Newdx.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=newdx_normal_df,grp1="new_dx",grp2="normal",draw = nrow(newdx_normal_df))
 boxplot_func(ref_df=newdx_normal_df,grp1="new_dx",grp2="normal",draw = nrow(newdx_normal_df)-1)
@@ -1450,7 +1490,7 @@ boxplot_func(ref_df=newdx_normal_df,grp1="new_dx",grp2="normal",draw = nrow(newd
 boxplot_func(ref_df=newdx_normal_df,grp1="new_dx",grp2="normal",draw = nrow(newdx_normal_df)-3)
 dev.off()
 
-png("07_4a_nmCSPC_higher_than_Newdx.png", height = 1024, width = 512)
+png("09_4a_nmCSPC_higher_than_Newdx.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=nmCSPC_newdx_df,grp1="nmCSPC",grp2="new_dx",draw = 1)
 boxplot_func(ref_df=nmCSPC_newdx_df,grp1="nmCSPC",grp2="new_dx",draw = 2)
@@ -1458,7 +1498,7 @@ boxplot_func(ref_df=nmCSPC_newdx_df,grp1="nmCSPC",grp2="new_dx",draw = 3)
 boxplot_func(ref_df=nmCSPC_newdx_df,grp1="nmCSPC",grp2="new_dx",draw = 4)
 dev.off()
 
-png("07_4b_Newdx_higher_than_nmCSPC.png", height = 1024, width = 512)
+png("09_4b_Newdx_higher_than_nmCSPC.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=nmCSPC_newdx_df,grp1="nmCSPC",grp2="new_dx",draw = nrow(nmCSPC_newdx_df))
 boxplot_func(ref_df=nmCSPC_newdx_df,grp1="nmCSPC",grp2="new_dx",draw = nrow(nmCSPC_newdx_df)-1)
@@ -1466,7 +1506,7 @@ boxplot_func(ref_df=nmCSPC_newdx_df,grp1="nmCSPC",grp2="new_dx",draw = nrow(nmCS
 boxplot_func(ref_df=nmCSPC_newdx_df,grp1="nmCSPC",grp2="new_dx",draw = nrow(nmCSPC_newdx_df)-3)
 dev.off()
 
-png("07_5a_nmCRPC_higher_than_nmCSPC.png", height = 1024, width = 512)
+png("09_5a_nmCRPC_higher_than_nmCSPC.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=nmCRPC_nmCSPC_df,grp1="nmCRPC",grp2="nmCSPC",draw=1)
 boxplot_func(ref_df=nmCRPC_nmCSPC_df,grp1="nmCRPC",grp2="nmCSPC",draw=2)
@@ -1474,7 +1514,7 @@ boxplot_func(ref_df=nmCRPC_nmCSPC_df,grp1="nmCRPC",grp2="nmCSPC",draw=3)
 boxplot_func(ref_df=nmCRPC_nmCSPC_df,grp1="nmCRPC",grp2="nmCSPC",draw=4)
 dev.off()
 
-png("07_5b_nmCSPC_higher_than_nmCRPC.png", height = 1024, width = 512)
+png("09_5b_nmCSPC_higher_than_nmCRPC.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=nmCRPC_nmCSPC_df,grp1="nmCRPC",grp2="nmCSPC",draw=nrow(nmCRPC_nmCSPC_df))
 boxplot_func(ref_df=nmCRPC_nmCSPC_df,grp1="nmCRPC",grp2="nmCSPC",draw=nrow(nmCRPC_nmCSPC_df)-1)
@@ -1482,7 +1522,7 @@ boxplot_func(ref_df=nmCRPC_nmCSPC_df,grp1="nmCRPC",grp2="nmCSPC",draw=nrow(nmCRP
 boxplot_func(ref_df=nmCRPC_nmCSPC_df,grp1="nmCRPC",grp2="nmCSPC",draw=nrow(nmCRPC_nmCSPC_df)-3)
 dev.off()
 
-png("07_6a_mCRPC_higher_than_nmCRPC.png", height = 1024, width = 512)
+png("09_6a_mCRPC_higher_than_nmCRPC.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=mCRPC_nmCRPC_df,grp1="mCRPC",grp2="nmCRPC",draw=1)
 boxplot_func(ref_df=mCRPC_nmCRPC_df,grp1="mCRPC",grp2="nmCRPC",draw=2)
@@ -1490,16 +1530,13 @@ boxplot_func(ref_df=mCRPC_nmCRPC_df,grp1="mCRPC",grp2="nmCRPC",draw=3)
 boxplot_func(ref_df=mCRPC_nmCRPC_df,grp1="mCRPC",grp2="nmCRPC",draw=4)
 dev.off()
 
-png("07_6b_nmCRPC_higher_than_mCRPC.png", height = 1024, width = 512)
+png("09_6b_nmCRPC_higher_than_mCRPC.png", height = 1024, width = 512)
 par(mfrow=c(4,1))
 boxplot_func(ref_df=mCRPC_nmCRPC_df,grp1="mCRPC",grp2="nmCRPC",draw=nrow(mCRPC_nmCRPC_df))
 boxplot_func(ref_df=mCRPC_nmCRPC_df,grp1="mCRPC",grp2="nmCRPC",draw=nrow(mCRPC_nmCRPC_df)-1)
 boxplot_func(ref_df=mCRPC_nmCRPC_df,grp1="mCRPC",grp2="nmCRPC",draw=nrow(mCRPC_nmCRPC_df)-2)
 boxplot_func(ref_df=mCRPC_nmCRPC_df,grp1="mCRPC",grp2="nmCRPC",draw=nrow(mCRPC_nmCRPC_df)-3)
 dev.off()
-
-#--------------------------------------------------------------------------------------------
-# longitudinal boxplots
 
 
 ####################################################################################### 
