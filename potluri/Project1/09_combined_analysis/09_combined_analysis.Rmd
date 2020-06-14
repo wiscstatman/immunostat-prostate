@@ -1,0 +1,1041 @@
+---
+title: | 
+  | Antibody Profiling of Prostate Cancer Patients 
+  | Between Disease Stages and Following Treatment
+author: "Tun Lee Ng and Michael A. Newton"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  pdf_document:
+    toc: true
+    number_sections: true
+header-includes:
+   \usepackage{enumerate}
+   \usepackage{amsmath}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+# Introduction 
+
+This supplemental analysis consists of two major sections:  
+
+* Section I focuses on characterizing antibody responses to a wide variety of proteins in prostate cancer patients at different stages of the disease.  
+
+* Section II focuses on analyzing whether treatments induces different changes in antibody repertoires in individuals over time.
+
+# Section I: Antibody Responses between Disease Stages
+
+## Preamble
+
+In this section, we consider a study that involved healthy subjects and patients with different stages of prostate cancer  
+
+*  ``new_dx``: newly diagnosed,
+* ``nmCSPC``: non-metastatic castration-sensitive
+* ``mCSPC``: metastatic castration-sensitive,
+* ``nmCRPC``: non-metastatic castration-resistant,
+* ``mCRPC``: metastatic castration-resistant  
+
+Each patient’s serum was assayed in a number of replicates, ``rep``, which were 1, 2, or 3, for peptide-specific IgG responses using a microarray: 16-mer peptides spanning the amino acid sequences of these 1611 gene products, and overlapping by 12 amino acids, were used to generate the microarray comprising 177,604 peptides. We also considered peptides with fluorescence intensity of at least $2^{12}$, and a sliding-window p-value of less than 0.05 (indicating high signal in adjacent peptides), in at least 2 of the 3 technical replicates to be called positive.
+
+We remove patients with ``rep`` = 1. The criterion for a positive call on a peptide for a patient was that they had to meet the signal (fluorescence level) threshold in at least two of the technical replicates. Since this is not possible for patients without technical replicates, we exclude them for consistency.
+
+```{r}
+library(allez)
+library(kableExtra)
+library(gridExtra)
+library(ggplot2)
+library(matrixStats) #rowMedians
+library(lme4) # linear mixed effects model
+library(lmerTest)
+library(fdrtool)
+library(heatmap3)
+library(tidyverse) # make sure you have the latest tidyverse !
+
+####################################################################################### 
+#                           Some Common Variables and Functions                       #
+####################################################################################### 
+
+# specified color and shape scheme 
+pal <- c("navy", "cornflowerblue", "turquoise1", "orchid1", "darkorange1", "firebrick1")
+names(pal) <- c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC")
+shp <- c(8, 15, 16, 3, 17, 18)
+names(shp) <- names(pal)
+
+
+# function to plot PCA loadings
+PCload.func <- function(cols, shapes, U, D, x, y, pca.vec, title){
+  Z <- U %*% diag(D)
+  plot(Z[,x], Z[,y], col = cols, pch = shapes, main = title, las = 1,
+       xlab = paste0("PC",x," (", round(pca.vec[x]*100, 1) ,"% variance explained)"),
+       ylab = paste0("PC",y," (", round(pca.vec[y]*100, 1) ,"% variance explained)") 
+  )
+}
+
+
+# function to count peptides at different FDR thresholds
+count.func <- function(pval.vec, thresh.vec){
+  counter <- NULL
+  for (i in thresh.vec ){
+    counter <- c(counter, length(pval.vec[pval.vec <= i]))
+  }
+  countab <- rbind(c("FDR threshold", thresh.vec),
+                   c("Peptide counts", counter))
+  return(countab)
+}
+
+
+# typical step in ANOVA
+anova_func <- function(anova_pval, xlab){
+  # control FDR
+  anova_BH <- p.adjust(anova_pval, method = "BH")
+  anova_qval <- fdrtool(anova_pval, statistic = "pvalue", verbose = F, plot  = F)$qval
+  anova_qval_eta0 <- unname(fdrtool(anova_pval, statistic = "pvalue", verbose = F, plot  = F)$param[,"eta0"])
+  
+  # plot histogram of p-values
+  all_peptide_hist <- hist(anova_pval, breaks = 70, freq = F, xlab = xlab, las = 1, 
+                           main = paste0("p-values distribution for ", length(anova_pval), " peptides"))
+  polygon_ind <- which(all_peptide_hist$density >= anova_qval_eta0)
+  for (i in polygon_ind){
+    polygon( x = c(all_peptide_hist$breaks[i], all_peptide_hist$breaks[i+1], all_peptide_hist$breaks[i+1], all_peptide_hist$breaks[i]),
+             y = c(all_peptide_hist$density[i], all_peptide_hist$density[i], anova_qval_eta0, anova_qval_eta0),
+             col = "red")
+  }
+  text(x=0.65,y=4, labels = paste( "estimated proportion of \nnon-null peptides =",
+                                   round( 100*(1 - anova_qval_eta0),2 ),"%" ))
+  
+  return(list(anova_BH = anova_BH, anova_qval = anova_qval, anova_qval_eta0 = anova_qval_eta0))
+}
+
+
+load("09_Cancer_Stage_Effects.RData")
+load("09_LMER_results.RData")
+raw_data_median <- read_csv("raw_data_median.csv")
+raw_data_median_proj2 <- read_csv("raw_data_median_proj2.csv")
+
+####################################################################################### 
+#                                      Data Processing                                #
+####################################################################################### 
+
+array_id_key = read_csv("sample_key_project1.csv") %>%
+  janitor::clean_names() %>% 
+  rename(stage = condition,
+         array_id = "file_name") %>%
+  mutate(id = str_replace_all(id, " ", ""),
+         id = str_to_lower(id),
+         id = str_replace_all(id, "/", ""),
+         stage = as_factor(stage),
+         stage = fct_recode(stage,
+                            "normal" = "Normal_male_controls",
+                            "new_dx" = "Newly_diagnosed",
+                            "nmCSPC" = "PSA-recurrent_nonMet",
+                            "mCSPC" = "Met",
+                            "nmCRPC" = "Castration-resistent_nonMet",
+                            "mCRPC" = "Castration-resistent_Met",
+                            "binding_buffer" = "Binding buffer alone"))
+
+# drop binding buffer
+array_id_key <- array_id_key[!(array_id_key$stage=="binding_buffer"),]
+array_id_key$stage <- factor(array_id_key$stage) # remove binding_buffer level
+
+# remove patients whose rep == 1
+patient_key = array_id_key %>%
+  group_by(id, stage) %>%
+  summarize(n = n()) %>%
+  ungroup() %>% 
+  filter(n >= 2) %>%
+  select(-n)
+array_id_key = array_id_key %>%
+  filter(id %in% patient_key$id)
+
+# there are patients who were measured at two different stages
+# To ensure unique patients, remove the following ids
+
+ids_to_remove = c("adt181",
+                  "adt223",
+                  "pdv008",
+                  "pap123",
+                  "pap067",
+                  "adt143")
+
+# drop patients' earlier records
+array_id_key = array_id_key %>%
+  filter(!(id %in% ids_to_remove))
+patient_key = array_id_key %>%
+  group_by(id, stage) %>%
+  tally() %>%
+  select(-n) 
+patient_key$stage <- relevel(patient_key$stage, ref = "normal")
+
+ncol_median <- ncol(raw_data_median)
+n <- nrow(patient_key)
+```
+
+Note that there were `r length(ids_to_remove)` patients who were measured at two different stages of prostate cancer. We removed their earlier-stage records, and finally arrive at `r nrow(patient_key)` distinct patients. 
+
+```{r, fig.height = 2.6}
+distinct_patients_with_reps <- array_id_key %>%
+  group_by(id, stage) %>%
+  summarize() %>%
+  group_by(stage) %>%
+  tally()
+
+ggplot(data=distinct_patients_with_reps, aes(x=stage, y=n)) + 
+  geom_bar(stat="identity", width=0.5 , fill="steelblue") + 
+  geom_text(aes(label=n), vjust=-0.3, size=2.5) +
+  labs(y = "patient counts", title = "Patient Counts by Disease Stages") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+We will utilize both binary calls data and fluorescence levels data to **investigate if patients at different stages of prostate cancer exhibit different antibody responses to certain peptide chains or proteins**. We take $\log_2$ transformation on the fluorescence levels prior to subsequent steps in our analysis.
+
+## Normalization of Fluorescence Data
+
+In order to verify normalization of the fluorescence level, we also plot the boxplots of median (across replicates) $\log_2$ fluorescence level of all peptides for each patient.
+
+```{r, fig.height = 5, cache = T, dependson=c("raw_data_median", "patient_key", "array_id_key")}
+####################################################################################### 
+#                         Check normalization of fluorescence data                    #         
+#######################################################################################
+
+median_long <- raw_data_median %>%
+  select(any_of(array_id_key$id)) %>%
+  pivot_longer(cols = everything(), names_to = "id", values_to = "fluorescence") 
+
+# set fill color
+median_long$stage <- patient_key$stage[ match(median_long$id, patient_key$id) ]
+
+# sort order of patients in boxplot
+median_long$id <- factor(median_long$id, levels = c(
+  patient_key$id[patient_key$stage == "normal"],
+  patient_key$id[patient_key$stage == "new_dx"],
+  patient_key$id[patient_key$stage == "nmCSPC"],
+  patient_key$id[patient_key$stage == "nmCRPC"],
+  patient_key$id[patient_key$stage == "mCRPC"]
+))
+
+ggplot(median_long, aes(x = id, y = fluorescence, fill = stage)) +
+  geom_boxplot(outlier.shape = ".") +
+  scale_fill_manual(name = "Stage", values = pal) +
+  labs(title = "Boxplots of Peptide Fluorescence Levels for All Patients", 
+       x = "Patient ID", y = "Median Fluorescence Levels on log2 scale") +
+  theme(panel.background = element_rect(fill = "grey90"),
+                 panel.grid.major = element_line(color = "white"),
+                 panel.grid.minor = element_line(color = "white"),
+                 axis.text.x = element_text(angle = 90, hjust = 1, size = 4.5),
+                 legend.position = "bottom",
+                 plot.title = element_text(hjust = 0.5))
+```
+
+It appears that the fluorescence levels of the peptides are normalized accordingly. 
+
+## Reproducibility of Replicates
+
+We have assessed the issue of replicate reproducibility by looking at (Pearson) correlation coefficients between patients' fluorescence levels. Another approach is to measure how much variation the technical replicates are contributing to the overall variation in the data. Everytime when the fluorescence levels were measured (with replicates) for patient's stage effects, there are two sources of random variation at play, namely  
+
+* patient/subject ``random effect``:  this reflects the biological variation of a patient (as opposed to the ``fixed effect`` term, which would be the cancer stage effect in this experiment)
+* (residual) random error: measuring replicates of a patient is itself a source of technical variation.   
+
+Specifically,  
+
+$$y_{ijk} = \mu + \beta_i + b_j + \epsilon_{ijk},$$  
+
+where  
+
+* $y_{ijk}$ denotes the $\log_2$ fluorescence level of a replicate,
+* $\mu$ denotes the grand mean/intercept,
+* $\beta_i$ denotes the fixed effect term, ie. cancer stage, with $i$ indexing the patients' cancer stage,
+* $b_j$ denotes the random effect term, ie. individual patient, with $j$ indexing the patients,
+* $\epsilon_{ijk}$ denotes the (residual) random error of the model, with $k$ indexing the replicates. 
+
+This is the linear mixed-effects model, which we deploy using the R package ``lme4``. The model estimates the two sources of variation: $\hat{\sigma}^2_b$ (biological variation) and $\hat{\sigma}^2_\epsilon$ (technical variation). Ideally, biological variation should dominate technical variation since the replicates' variance $\hat{\sigma}^2_{\epsilon}$ should be minimal. Hence, we are interested in the estimated proportion of random-effect variance to total variance  
+
+$$\dfrac{\hat{\sigma}^2_b}{ \hat{\sigma}^2_b + \hat{\sigma}^2_\epsilon},$$  
+
+and we would like to see if this ratio is close to one. For each of the 177,604 peptides, we deploy this mixed-effect model, and plot the histogram of the estimated proportions of variances.
+
+```{r, fig.height = 5}
+# get estimated proportion of variances
+lmer_var_ratio <- lmer_result[,'variance_id'] / ( lmer_result[,'variance_id'] + lmer_result[,'variance_residual']  )
+hist(lmer_var_ratio, breaks = 100, xlab = "estimated proportion of variances",
+     main = "Histogram of peptide-level proportion of \nrandom-effect variance to total variance")
+```
+
+As expected, the histogram amasses at values near one, indicating that most of the variation in the ($\log_2$) fluorescence data is attributable to the biological variation of the patients and not the technical replicates themselves, which also suggests reproducibility of the replicates. 
+
+## Tests on Binary Calls
+
+```{r}
+# read aggregated calls data
+calls = read_csv("aggregated_calls_full_nmcspc.csv") 
+calls$PROBE_ID = paste0(calls$seq_id, ";", calls$position)
+calls <- calls %>% select(container:position, PROBE_ID, everything()) # rearrange columns
+
+# keep only patients that appear in patient_sample_key
+calls <- calls %>% select(container:PROBE_ID, any_of(patient_key$id))
+
+# get calls_long for later
+calls_long <- calls %>%
+  select(PROBE_ID, any_of(array_id_key$id)) 
+
+# remove peptides that have zero calls in ALL subjects
+calls <- calls[ apply( calls %>% select(any_of(patient_key$id)) , 1, function(x){ !all(x==0) } ) , ]
+```
+
+The binary calls on a peptide of a patient are conservative -- out of 177,604 peptides, only `r nrow(calls)` of them have at least one call among all patients. To verify that positive calls are associated with stronger signals (remember that ``call`` = 1 if fluorescence levels meet a certain signal threshold in at least two of the replicates), we plot the boxplot of $\log_2$ fluorescence levels for all peptides across all patients, comparing between those that are associated with positive calls and those with zero-calls. Boxplots are plotted with their width reflecting the sample size in each group (positive or zero call).  
+
+```{r, fig.height = 3.1, cache = T, dependson=c("raw_data_median", "calls_long", "array_id_key")}
+# get median_long 
+median_long2 <- raw_data_median %>%
+  select(PROBE_ID, any_of(array_id_key$id)) 
+
+# rearrange rows and columns to match calls_long & median_long
+calls_long <- calls_long[, match(colnames(median_long2), colnames(calls_long))]
+calls_long <- calls_long[ match(median_long2$PROBE_ID, calls_long$PROBE_ID) , ]
+
+# pivot_longer
+median_long2 <- median_long2 %>% select(-PROBE_ID) %>%
+  pivot_longer(cols = everything(), names_to = "id", values_to = "fluorescence") 
+calls_long <- calls_long %>% select(-PROBE_ID) %>%
+  pivot_longer(cols = everything(), names_to = "id", values_to = "calls") 
+
+# plot fluorescence of calls vs no-calls
+calls_fl_df <- data.frame(
+  calls = factor(calls_long$calls),
+  fluorescence = median_long2$fluorescence
+)
+
+ggplot(calls_fl_df, aes(x = calls, y = fluorescence, fill = calls)) +
+  geom_boxplot(outlier.shape = ".", varwidth = T) +
+  labs(title = "Boxplots of Fluorescence Levels per Peptide per Patient", 
+       x = "Call per peptide per patient", y = "Median log2 Fluorescence Levels") +
+  theme(panel.background = element_rect(fill = "grey90"),
+        panel.grid.major = element_line(color = "white"),
+        panel.grid.minor = element_line(color = "white"),
+        plot.title = element_text(hjust = 0.5))
+```
+
+For each of these `r nrow(calls)` peptides, we run a logistic regression based on these binary calls of the patients in order **to determine if calls are significantly different among patients of different cancer stages**.  
+
+Specifically, for each of these `r nrow(calls)` peptides, we fit the following model:
+
+$$
+\text{logit} \left( y^{\text{calls}}_{ij} \right)
+= \mu + \beta_i + \epsilon_{ij},
+$$
+
+where  
+
+* $y^{\text{calls}}_{ij}$ denotes the binary call of the peptide of a patient: 1 if the fluorescence levels meet the signal threshold in at least two replicates of the patient, and 0 otherwise,
+* $\mu$ denotes the grand mean/intercept,
+* $\beta_i$ denotes the cancer stage,
+* $\epsilon_{ij}$ denotes the random error of the model, with $j$ indexing the patients,  
+
+and compute the deviance p-values: (null_deviance - residual_deviance) $\sim$ $\chi^2$ with `r length(unique(patient_key$stage)) - 1` degrees of freedom. We plot the histogram of the `r nrow(calls)` p-values.
+
+```{r, fig.height = 3}
+# plot histogram of p-values
+hist(logreg_pval, breaks = 50, freq = T, main = "Logistic Regression Deviance p-values", xlab = "p-values ")
+```
+
+It appears that there are hardly any signals of different calls pattern among patients of different cancer stages, which corroborates with the results in the main manuscript. As expected, after correcting for false discovery rate, no peptides appear to be significant. 
+
+## Tests on Fluorescence Levels 
+
+```{r}
+# make sure patients' stages align with raw_data_median
+median_iii <- match( colnames(select( raw_data_median, any_of(array_id_key$id) )), patient_key$id )
+median_stage <- patient_key$stage[median_iii]
+median_stage <- factor(median_stage)
+```
+
+We hypothesized that while the overall number of peptides recognized may not change with disease stages, the composition of peptides recognized may be different. In this section, we will instead utilize the fluorescence data to investigate our hypothesis.  
+
+We are aware that the $\log_2$ fluorescence data among the prostate cancer patients of different disease stages may violate the assumptions in the normal-theory one-way analysis of variance (ANOVA). For one, the variation of fluorescence levels among patients of different stages may not be similar, as illustrated by the boxplots of the peptide *1324_KIAA1430_57587;185* as an example.
+
+```{r, fig.height = 3}
+par(mar=c(3.1, 5.1, 2.1, 2.1), mgp=c(2, 0.8, 0))
+graphics::boxplot(as.numeric( raw_data_median %>%
+                                filter(PROBE_ID == "1324_KIAA1430_57587;185") %>%
+                                select(any_of(array_id_key$id)) ) ~ median_stage, 
+                  varwidth = T, horizontal = T, las = 1,
+                  col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
+                  main = "Peptide ID: 1324_KIAA1430_57587;185", xlab = "log2(fluorescence)", ylab = "")
+```
+
+Presence of outliers may also distort inference by the ANOVA. An example would be the peptide *459_CLTC_1213;1421*.
+
+```{r, fig.height = 3}
+par(mar=c(3.1, 5.1, 2.1, 2.1), mgp=c(2, 0.8, 0))
+graphics::boxplot(as.numeric( raw_data_median %>%
+                                filter(PROBE_ID == "459_CLTC_1213;1421") %>%
+                                select(any_of(array_id_key$id)) ) ~ median_stage, 
+                  varwidth = T, horizontal = T, las= 1,
+                  col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
+                  main = "Peptide ID: 459_CLTC_1213;1421", xlab = "log2(fluorescence)", ylab = "")
+```
+
+To avoid making any distributional assumptions on the fluorescence levels, we adopt the nonparamteric Kruskal-Wallis test on each of the 177,604 peptides to test:
+
+$H_0$: The antibody responese levels (in terms of $\log_2$ fluorescence levels) for each disease stage are stochastically equal, ie. Once the fluorescence levels from all groups are ranked, the probability of an observation from one group being higher than an observation from another group is 0.5.  
+$H_1$: The antibody responese levels for at least one disease stage are stochastically dominant than those of other groups in the study.  
+
+Note that this is not a test of medians of the fluorescence levels since we are not making any distributional assumptions (shape and spread) on the fluorescence levels. 
+
+After getting p-values for all the peptides, we plot the p-value histogram.
+
+```{r}
+# get p-values histogram and FDR 
+all_kw <- anova_func(all_kw_pval, "Kruskal-Wallis p-values")
+```
+
+If cancer-stage effect is not present in our peptide array data, then the p-values from the Kruskal-Wallis tests would have a uniform distribution between 0 and 1, and we expect to see a rather flat-shaped histogram of p-values.  
+
+However, the p-values histogram exhibits large counts of significant p-values (p-values close to zero), and the shape of histogram flattens off exponentially with larger p-values. Such a large count of significant p-values may not be explained by false discovery alone, and that perhaps cancer-stage effect is indeed present in some of the peptides in our profile. The red-shaded regions of the histogram represents the estimated proportion of non-null peptides in the data based on Storey's q-values calculation obtained via the R package ``fdrtool``.  
+
+We apply the Benjamini-Hochberg (BH) method on the Kruskal-Wallis p-values to control for false discovery rate (FDR). The peptide counts at various BH FDR thresholds are tabulated below. 
+
+```{r}
+kable( count.func(all_kw$anova_BH, seq(0.01, 0.1, by = 0.01)),
+       format = "latex", row.names= NA, col.names = NA, booktabs = T )%>%
+  kable_styling(latex_options = c("scale_down", "hold_position")) %>%
+  row_spec(1, hline_after = T)
+
+kw_FDR5prct <- length(all_kw$anova_BH[all_kw$anova_BH <= .05])
+```
+
+We could obtain a graphical representation to illustrate how the $\log_2$ fluorescence levels differ across different cancer stages for these peptides via the Principal Component Analysis (PCA). For each peptide, we remove the grand mean (row mean) of the $\log_2$ fluorescence levels for all patients before performing PCA on the residuals. If there is no cancer-stage effect, we expect these residual $\log_2$ fluorescence to be random noises. Any observed (clustering) patterns among these residual data points reveal the effects of various stages of prostate cancer.  
+
+For purpose of uniformity, we also use the same color scheme to distinguish the different stages of cancer patients (notice how the spectrum of colors changes with severity of the cancer stages):  
+
+* navy for healthy subjects
+* cornflower_blue for ``new_dx`` newly diagnosed patients
+* turquoise for ``nmCSPC`` patients
+* light_pink for ``mCSPC`` patients -- these patients have no technical replicates and are excluded from this analysis
+* dark_orange for ``nmCSPC`` patients
+* dark_red for ``mCSPC`` patients 
+
+```{r}
+# PCA after Kruskal-Wallis
+BH_FDR_cutoff <- .05
+
+anova_dat <- raw_data_median %>% 
+  select(PROBE_ID, any_of(patient_key$id)) %>% 
+  mutate(anova_BH = all_kw$anova_BH[raw_data_median$PROBE_ID]) %>%
+  filter(anova_BH <= BH_FDR_cutoff) %>%
+  select(-anova_BH)
+
+anova_dat_demean <- sweep(as.matrix(anova_dat %>% select(-PROBE_ID)), 1, 
+                          rowMeans(as.matrix(anova_dat %>% select(-PROBE_ID))), "-") # centering by row
+
+# make sure stage aligns with anova_dat_demean
+visual_iii <- match( colnames(anova_dat_demean) , patient_key$id )
+visual_stage <- patient_key$stage[visual_iii]
+
+# colors and shapes for the visualization techniques
+cols = pal[ match(visual_stage, names(pal)) ]
+shapes = shp[  match(visual_stage, names(shp)) ]
+
+# svd
+sv.dat <- sweep(t(anova_dat_demean), 2, colMeans(t(anova_dat_demean)), "-") # centering
+sv <- svd(sv.dat)
+V <- sv$v
+D <- sv$d
+U <- sv$u
+
+# variance explained
+pca.var <- D^2/sum(D^2) 
+pca.cumvar <- cumsum(pca.var)
+
+# plot PCA
+par(mfrow = c(1,2), pty = "s", mar = c(2.2,2.3,1.5,0.45), mgp = c(1.6,0.4,0),
+    cex.axis = 0.84, cex.lab = 0.84, cex.main = 0.84, tcl = -0.4)
+PCload.func(cols, shapes, U, D, 1, 2, pca.var, title = "PC2 vs PC1") # PC loadings (PC2 vs PC1)
+legend('topright', pch = shp, col = pal, cex = 0.5,
+       c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC") )
+PCload.func(cols, shapes, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
+```
+
+From the "\textit{PC2 vs PC1}" plot, we observe that all mCRPC points are clustered at the topright of the panel, whereas newly-diagnosed and nmCRPC observations hover at the bottom of panel. The percentage of variance explained for each principal component (PC) is shown on the axis. Note that the first principal component manages to capture most of the variation in the data.   
+
+## Pairwise Comparisons
+
+Based on the Kruskal-Wallis tests, we identified `r kw_FDR5prct` peptides for which at least one group of patients stochastically dominates patients from the other disease stages at 5\% BH FDR. Among these "interesting" peptides, we are interested in making some further pairwise comparisons between the groups of patients. In particular, we would like to analyze if antibody responses are different between cancer patients and healthy subjects. Besides that, the PCA plot has revealed that the mCRPC (worst-case scenario) patients are clustered away from the other patients and it may be interesting to compare how the antibody profiles of the mCRPC (worst-case-scenario) patients could be different from the other subjects. In addition, we would like to make pairwise comparison between consecutive groups of patients in terms of disease severity, namely:  
+
+* between mCRPC and nmCRPC patients
+* between nmCRPC and nmCSPC patients
+* between nmCSPC and newly-diagnosed patients
+* between newly-diagnosed and healthy subjects  
+
+For each of the `r kw_FDR5prct` peptides, we will perform a two-sided Wilcoxon-Rank-Sum (henceforth known as Wilcoxon) test for each of the 6 contrasts as mentioned above, to test the following hypothesis:  
+
+$H_0$: The antibody responses of both groups of patients are stochastically equal.  
+$H_1$: The antibody responses of both groups of patients are NOT stochastically equal.  
+
+Exact p-values are computed for each Wilcoxon test whenever possible -- if there are ties in the fluorescence levels, then normal approximation is used to obtain the p-values. After getting the `r kw_FDR5prct` p-values for each of the 6 contrasts, we plot their p-value density histograms at the same scale.
+
+```{r}
+# pval histograms 
+wilcox_pval_df <- data.frame(
+  group_pair = c(
+    rep("mCRPC vs nmCRPC", kw_FDR5prct),
+    rep("nmCRPC vs nmCSPC", kw_FDR5prct),
+    rep("nmCSPC vs new_dx", kw_FDR5prct),
+    rep("new_dx vs normal", kw_FDR5prct),
+    rep("cancer vs normal", kw_FDR5prct),
+    rep("mCRPC vs others", kw_FDR5prct)
+  ),
+  p_values = c(
+    mCRPC_nmCRPC_wilcox_pval,
+    nmCRPC_nmCSPC_wilcox_pval,
+    nmCSPC_newdx_wilcox_pval,
+    newdx_normal_wilcox_pval,
+    cancer_normal_wilcox_pval,
+    mCRPC_others_wilcox_pval
+  )
+) 
+wilcox_pval_df$group_pair <- factor(wilcox_pval_df$group_pair, levels = c(
+  "cancer vs normal", "mCRPC vs others",
+  "mCRPC vs nmCRPC", "nmCRPC vs nmCSPC",
+  "nmCSPC vs new_dx", "new_dx vs normal"
+))
+ggplot(wilcox_pval_df, aes(x = p_values)) +
+  geom_histogram(aes(y=..density..), bins = 50) +
+  facet_wrap(. ~ group_pair, ncol=2) +
+  labs(x = "Wilcoxon p-values", title = paste0("Density Histograms of the ", kw_FDR5prct, " Wilcoxon p-values")) + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+The BH procedure is also performed **on the `r kw_FDR5prct` Wilcoxon p-values separately for each contrast** to control FDR within each contrast (at 5\%). On top of that, we also require at least a two-fold difference between the medians of the two groups' fluorescence levels, ie. the absolute difference of the medians of the $\log_2$ fluorescence $\geq$ 1. We graph the number of peptides that fulfill these two secondary cut-offs.
+
+```{r, fig.height=3.3}
+# get group medians
+group_median.func <- function(group, BH_filter){
+  raw_data_median %>% 
+    select(any_of(array_id_key$id)) %>% 
+    select(which(patient_key$stage %in% group)) %>%
+    # filter(all_anova$anova_BH <= BH_filter) %>%
+    filter(all_kw$anova_BH <= BH_filter) %>%
+    as.matrix() %>%
+    matrixStats::rowMedians() 
+}
+mCRPC_median <- group_median.func("mCRPC", BH_FDR_cutoff)
+nmCRPC_median <- group_median.func("nmCRPC", BH_FDR_cutoff)
+nmCSPC_median <- group_median.func("nmCSPC", BH_FDR_cutoff)
+newdx_median <- group_median.func("new_dx", BH_FDR_cutoff)
+normal_median <- group_median.func("normal", BH_FDR_cutoff)
+cancer_median <- group_median.func(c("new_dx", "nmCSPC", "nmCRPC", "mCRPC"), BH_FDR_cutoff)
+NOT_mCRPC_median <- group_median.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"), BH_FDR_cutoff)
+
+# get BH-corrected pval (restricted to signif peptides from Kruskal-Wallis)
+mCRPC_nmCRPC_wilcox_BH <- p.adjust(mCRPC_nmCRPC_wilcox_pval, method = "BH")
+nmCRPC_nmCSPC_wilcox_BH <- p.adjust(nmCRPC_nmCSPC_wilcox_pval, method = "BH")
+nmCSPC_newdx_wilcox_BH <- p.adjust(nmCSPC_newdx_wilcox_pval, method = "BH")
+newdx_normal_wilcox_BH <- p.adjust(newdx_normal_wilcox_pval, method = "BH")
+cancer_normal_wilcox_BH <- p.adjust(cancer_normal_wilcox_pval, method = "BH")
+mCRPC_others_wilcox_BH <- p.adjust(mCRPC_others_wilcox_pval, method = "BH")
+
+wilcox_peptide_counts_df <- data.frame(
+  pairwise_comparison = c(
+    "cancer vs normal",
+    "mCRPC vs others",
+    "mCRPC vs nmCRPC", 
+    "nmCRPC vs nmCSPC",
+    "nmCSPC vs new_dx", 
+    "new_dx vs normal"
+  ),
+  peptide_counts = c(
+    length(which(abs(cancer_median - normal_median) > 1 & cancer_normal_wilcox_BH <= BH_FDR_cutoff)),
+    length(which(abs(mCRPC_median - NOT_mCRPC_median) > 1 & mCRPC_others_wilcox_BH <= BH_FDR_cutoff)),
+    length(which(abs(mCRPC_median - nmCRPC_median) > 1 & mCRPC_nmCRPC_wilcox_BH <= BH_FDR_cutoff)),
+    length(which(abs(nmCRPC_median - nmCSPC_median) > 1 & nmCRPC_nmCSPC_wilcox_BH <= BH_FDR_cutoff)),
+    length(which(abs(nmCSPC_median - newdx_median) > 1 & nmCSPC_newdx_wilcox_BH <= BH_FDR_cutoff)),
+    length(which(abs(newdx_median - normal_median) > 1 & newdx_normal_wilcox_BH<= BH_FDR_cutoff))
+  )
+)
+
+wilcox_peptide_counts_df$pairwise_comparison <- factor(wilcox_peptide_counts_df$pairwise_comparison, levels = c(
+  "cancer vs normal", "mCRPC vs others",
+  "mCRPC vs nmCRPC", "nmCRPC vs nmCSPC",
+  "nmCSPC vs new_dx", "new_dx vs normal"
+))
+
+# kable(wilcox_peptide_counts_df, row.names = F, booktabs = T, linesep = "") %>%
+#   kable_styling(position = "center")
+
+ggplot(data=wilcox_peptide_counts_df, aes(x=pairwise_comparison, y=peptide_counts)) + 
+  geom_bar(stat="identity", width=0.4 , fill="steelblue") + 
+  geom_text(aes(label=peptide_counts), vjust=-0.3, size=2.5) +
+  labs(y = "peptide counts", title = "Peptide Counts at 5% BH FDR based on Wilcoxon p-values \nwith at least two-fold difference in medians of fluorescence") +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(size = 5))
+```
+
+The volcano plots for these contrasts are also obtained. Each volcano plot has `r kw_FDR5prct` points, which are the peptides identified by the omnibus Kruskal-Wallis tests at 5\% BH FDR. The Wilcoxon p-values of each contrast are plotted at $-\log_{10}$ scale. The peptides which meet the secondary cutoffs for each contrast are colored red. The vertical blue dashed lines refer to the two-fold difference in medians. The horizontal blue dashed line refers to the minimum $-\log_{10}$ (p-value) at which the peptides meet the secondary 5\% BH FDR cutoff based on the Wilcoxon p-values.  
+
+From the bar chart of peptide counts and volcano plots of the pairwise comparisons of consecutive groups, it appears that as disease stage worsens, some peptides exhibit significantly higher median fluorescence levels (especially from nmCSPC to nmCRPC) whereas many peptides also display lower median fluorescence levels (especially from nmCRPC to mCRPC). Overall, if we compare the worst-case-scenario mCRPC against the other stages, many peptides exhibit significantly different (could be higher or lower) median fluorescence. Such changes across disease stages may explain why fewer significant peptides show up when we compare all cancer patients against healthy subjects.  
+
+The lists of significant/interesting peptides are also exported to the spreadsheet "*09_Significant_Peptides.xlsx*". Specifically, the "*Kruskal-Wallis*" sheet contains the `r kw_FDR5prct` peptides at 5\% BH FDR based on the Kruskal-Wallis tests on all 177,604 peptides. The other contrast sheets (for example, the "*cancer vs normal*" sheet) contain the lists of peptides at 5\% BH FDR (based on the Wilcoxon tests on the `r kw_FDR5prct` peptides) which also exhibit at least a two-fold difference in medians of the two groups. 
+
+```{r, fig.height=10, fig.width=8}
+# volcano plots of contrasts
+
+# make sure contrast_diff and contrast_pval and contrast_BH of same length !!
+
+contrast_volcano_plot.func <- function(contrast_diff, contrast_pval, contrast_BH, test_type, measure, contrast_title, xlim = c(-7,6), ylim = c(0,8)){
+  signif_counts = length(which(abs(contrast_diff) > 1 & contrast_BH <= BH_FDR_cutoff))
+  horizontal_pval = max(contrast_pval[contrast_BH<= BH_FDR_cutoff])
+  plot(x = contrast_diff, y = -log10(contrast_pval), pch = ".", xlim = xlim, ylim = ylim, las = 1,
+       xlab = paste0("difference of ", measure, " log2(fluorescence)"), 
+       ylab = paste0("-log10(contrast ",test_type, " p-values)"),
+       main = paste0("Volcano plot of contrast: ", contrast_title))
+  text(x = 4, y = 7, paste0(signif_counts, " signif peptides"))
+  lines(x = contrast_diff[ contrast_BH <= BH_FDR_cutoff & abs(contrast_diff) >= 1 ], 
+        y = -log10(contrast_pval[ contrast_BH <= BH_FDR_cutoff & abs(contrast_diff) >= 1]),
+        type = "p", pch = ".", col = "red")
+  abline(v = 1, col = "blue", lty = 2, lwd = 2)
+  abline(v = -1, col = "blue", lty = 2, lwd = 2)
+  abline(h = -log10(horizontal_pval), col = "blue", lty = 2, lwd = 2)
+}
+
+# png("09_contrast_volcano_plots(KW_wilcox_diffmedian_cutoff).png", width = 1024, height = 1024)
+par(mfrow = c(3,2))
+# cancer vs normal
+contrast_volcano_plot.func(cancer_median - normal_median, 
+                           cancer_normal_wilcox_pval, 
+                           cancer_normal_wilcox_BH, 
+                           "Wilcoxon",
+                           "median",
+                           "cancer vs normal")
+
+# mCRPC vs others
+contrast_volcano_plot.func(mCRPC_median - NOT_mCRPC_median, 
+                           mCRPC_others_wilcox_pval, 
+                           mCRPC_others_wilcox_BH, 
+                           "Wilcoxon",
+                           "median",
+                           "mCRPC vs others" )
+
+# mCRPC vs nmCRPC
+contrast_volcano_plot.func(mCRPC_median - nmCRPC_median, 
+                           mCRPC_nmCRPC_wilcox_pval, 
+                           mCRPC_nmCRPC_wilcox_BH, 
+                           "Wilcoxon",
+                           "median",
+                           "mCRPC vs nmCRPC")
+
+# nmCRPC vs nmCSPC
+contrast_volcano_plot.func(nmCRPC_median - nmCSPC_median, 
+                           nmCRPC_nmCSPC_wilcox_pval, 
+                           nmCRPC_nmCSPC_wilcox_BH, 
+                           "Wilcoxon",
+                           "median",
+                           "nmCRPC vs nmCSPC")
+
+# nmCSPC vs new_dx
+contrast_volcano_plot.func(nmCSPC_median - newdx_median, 
+                           nmCSPC_newdx_wilcox_pval, 
+                           nmCSPC_newdx_wilcox_BH, 
+                           "Wilcoxon",
+                           "median",
+                           "nmCSPC vs new_dx")
+
+# new_dx vs normal
+contrast_volcano_plot.func(newdx_median - normal_median, 
+                           newdx_normal_wilcox_pval, 
+                           newdx_normal_wilcox_BH, 
+                           "Wilcoxon",
+                           "median",
+                           "new_dx vs normal")
+```
+
+## Visualization
+
+```{r}
+posthoc_signif_crit <- ( abs(mCRPC_median - nmCRPC_median) > 1 & mCRPC_nmCRPC_wilcox_BH <= BH_FDR_cutoff ) |
+  ( abs(nmCRPC_median - nmCSPC_median) > 1 & nmCRPC_nmCSPC_wilcox_BH <= BH_FDR_cutoff ) |
+  ( abs(nmCSPC_median - newdx_median) > 1 & nmCSPC_newdx_wilcox_BH <= BH_FDR_cutoff ) |
+  ( abs(newdx_median - normal_median) > 1 & newdx_normal_wilcox_BH<= BH_FDR_cutoff ) |
+  ( abs(cancer_median - normal_median) > 1 & cancer_normal_wilcox_BH <= BH_FDR_cutoff ) |
+  ( abs(mCRPC_median - NOT_mCRPC_median) > 1 & mCRPC_others_wilcox_BH <= BH_FDR_cutoff )
+
+secondary_cutoff_counts <- sum(as.numeric(posthoc_signif_crit))
+
+anova_dat <- raw_data_median %>% 
+  select(PROBE_ID, any_of(patient_key$id)) %>% 
+  # mutate(anova_BH = all_anova$anova_BH[raw_data_median$PROBE_ID]) %>%
+  mutate(anova_BH = all_kw$anova_BH[raw_data_median$PROBE_ID]) %>%
+  filter(anova_BH <= BH_FDR_cutoff) %>%
+  select(-anova_BH) %>%
+  filter(posthoc_signif_crit)
+
+anova_dat_demean <- sweep(as.matrix(anova_dat %>% select(-PROBE_ID)), 1, 
+                          rowMeans(as.matrix(anova_dat %>% select(-PROBE_ID))), "-") # centering by row
+```
+
+We are interested in peptides that meet the secondary cutoffs (at least a two-fold difference in medians and 5\% BH FDR based on the Wilcoxon p-values) in at least one of the 6 contrasts. Out of the `r kw_FDR5prct` peptides at 5\% BH FDR based on the Kruskal-Wallis p-values, only `r secondary_cutoff_counts` of them also meet the secondary cutoff. We shall use these `r secondary_cutoff_counts` peptides to illustrate the effects of cancer stages via heatmap.  
+
+We remove the gand mean of each row of $\log_2$ fluorescence. The fluorescence residuals are then winsorized at -2 and 2, which correspond to roughly bottom 12\% and top 15\% of the residuals. We then use these winsorized fluorescence residuals to plot the heatmap without any row-wise scaling. The color scheme of the heatmap is specified as navy for -2 which gradually transitions to firebrick for 2.    
+
+From the heatmap, we observe a clear pattern. The bottom part of the heatmap consists of peptides that show higher fluorescence levels consistently among all mCRPC patients compared to other groups of patients. Interestingly, there seem to be equal number of healthy subjects who display either higher or lower antibody responses in these peptides. Meanwhile, the upper part of the heatmap consists of peptides that show lower antibody responses consistenly among mCRPC as well as nmCRPC patients.  
+
+We also could also reproduce the PCA plot for these unwinsorized fluorescence residuals of these `r secondary_cutoff_counts` peptides. Interestingly, they largely preserve the clustering pattern that we observe in the previous PCA plot when we use all the `r kw_FDR5prct` peptides at 5\% BH FDR based on the Kruskal-Wallis p-values.
+
+```{r}
+cols = pal[ match(visual_stage, names(pal)) ]
+shapes = shp[  match(visual_stage, names(shp)) ]
+
+# svd
+sv.dat <- sweep(t(anova_dat_demean), 2, colMeans(t(anova_dat_demean)), "-") # centering
+sv <- svd(sv.dat)
+V <- sv$v
+D <- sv$d
+U <- sv$u
+
+# variance explained
+pca.var <- D^2/sum(D^2) 
+pca.cumvar <- cumsum(pca.var)
+
+# plot PCA
+par(mfrow = c(1,2), pty = "s", mar = c(2.2,2.3,1.5,0.45), mgp = c(1.6,0.4,0),
+    cex.axis = 0.84, cex.lab = 0.84, cex.main = 0.84, tcl = -0.4)
+PCload.func(cols, shapes, U, D, 1, 2, pca.var, title = "PC2 vs PC1") # PC loadings (PC2 vs PC1)
+legend('topright', pch = shp, col = pal, cex = 0.5,
+       c("normal",  "new_dx", "nmCSPC", "mCSPC", "nmCRPC", "mCRPC") )
+PCload.func(cols, shapes, U, D, 3, 2, pca.var, title = "PC2 vs PC3") # PC loadings (PC2 vs PC3)
+```
+
+
+```{r, fig.height = 10, fig.width = 8, fig.show = 'hide', cache = T, dependson=c("anova_dat_demean, patient_key")}
+# make sure stage aligns with anova_dat_demean
+visual_iii <- match( colnames(anova_dat_demean) , patient_key$id )
+visual_stage <- patient_key$stage[visual_iii]
+
+# colors and shapes for the visualization techniques
+cols = pal[ match(visual_stage, names(pal)) ]
+cls <- colorRampPalette(c("navy", "honeydew", "firebrick1"))(n = 1024)
+
+get_column_order.func <- function(stages){
+  heat_map <- heatmap3(anova_dat_demean[,visual_stage == stages],col = cls, labRow = "", scale = "none", 
+                       showColDendro = F, showRowDendro = F)
+  return( colnames(anova_dat_demean[,visual_stage == stages])[heat_map$colInd] )
+}
+
+normal_id_order <- get_column_order.func("normal")
+newdx_id_order <- get_column_order.func("new_dx")
+nmCSPC_id_order <- get_column_order.func("nmCSPC")
+nmCRPC_id_order <- get_column_order.func("nmCRPC")
+mCRPC_id_order <- get_column_order.func("mCRPC")
+
+id_order <- match( c(normal_id_order, newdx_id_order, nmCSPC_id_order, nmCRPC_id_order, mCRPC_id_order),
+                   colnames(anova_dat_demean) )
+```
+
+```{r, fig.height = 10, fig.width = 8, cache = T, dependson=c("anova_dat_demean", "id_order")}
+anova_dat_demean_winsorize <- t( apply(anova_dat_demean, 1, function(x){
+  x[x < -2] = -2
+  x[x > 2] = 2
+  return(x)
+}) )
+
+heatmap3(anova_dat_demean_winsorize[,id_order], 
+         col = cls, # specify colors 
+         ColSideColors = cols[id_order], # specify patient color code
+         Colv = NA,
+         scale = "none", # no scaling by row
+         labCol = visual_stage[id_order], # specify patient
+         ColSideLabs = "stages", 
+         labRow = "",
+         xlab = "Patients",
+         legendfun=function() showLegend(col = c("navy", "cornflowerblue", "turquoise1", "darkorange1", "firebrick1"),
+                                         legend = c("normal",  "new_dx", "nmCSPC", "nmCRPC", "mCRPC"),
+                                         cex = 1.2,
+                                         lwd = 5  )
+)
+```
+
+## Gene-Set-Analyses
+
+
+# Section II: Antibody Responses over Time after Treatments
+
+## Preamble
+
+Now, we want to investigate how treatments induce changes in antibody repertoires in individuals over time. To address this question, we used serum samples available from the 40 patients with nmCSPC who were treated with one of two therapies. 20 patients received standard androgen deprivation therapy (ADT; GnRh analogue given every 3 months), and 20 patients received a DNA vaccine encoding prostatic-acid phosphatase (PAP; pTVG-HP given every 14 days for 6 administrations). Samples were collected (3 replicates) from each of these patients at baseline, 3 months, and 6 months following initiation of treatment. 
+
+```{r}
+pal_proj2 <- c("turquoise1", "cornflowerblue","navy", "orchid1", "darkorange1", "firebrick1")
+names(pal_proj2) <- c("ADT_time:0", "ADT_time:3", "ADT_time:6", "PAP_time:0", "PAP_time:3", "PAP_time:6")
+
+####################################################################################### 
+#                                      Data Processing                                #
+####################################################################################### 
+
+array_id_key_proj2 = read_tsv("sample_key_project2.txt") %>%
+  janitor::clean_names() %>% 
+  rename(treatment = condition,
+         array_id = "file_name") %>%
+  mutate(id = tolower(id))
+
+sample_key_proj2 = array_id_key_proj2 %>%
+  group_by(id, time) %>% 
+  summarize(n = n()) %>%
+  ungroup() %>%
+  filter(n>=2) 
+
+# remove patients with no replicates
+array_id_key_proj2 = array_id_key_proj2 %>% 
+  filter(id %in% sample_key_proj2$id)
+
+# make sure sample_key_proj2 align with raw_data_median_proj2
+sample_key_proj2 <- sample_key_proj2 %>%
+  select(-n) %>%
+  arrange(time, id)
+sample_key_proj2 <- sample_key_proj2 %>% 
+  left_join(array_id_key_proj2 %>% select(id, treatment) %>% distinct())
+```
+
+Again, we take $\log_2$ transformation on the fluorescence levels prior to subsequent steps in our analysis. 
+
+## Normalization of Fluorescence Data
+
+In order to verify normalization of the fluorescence level, we also plot the boxplots of median (across replicates) $\log_2$ fluorescence level of all peptides for each patient at each time point.
+
+```{r, fig.height = 5, cache = T, dependson=c("raw_data_median_proj2", "sample_key_proj2")}
+median_long_proj2 <- raw_data_median_proj2 %>%
+  select(contains("id:")) %>%
+  pivot_longer(cols = everything(), names_to = "id_time", values_to = "fluorescence") 
+
+# set fill color
+median_long_proj2$treat_time <- rep( paste(sample_key_proj2$treatment, sample_key_proj2$time, sep = "_"), 177604)
+median_long_proj2  <- median_long_proj2 %>%
+  mutate(treat_time = as_factor(treat_time),
+         treat_time = fct_recode(treat_time,
+                            "ADT_time:0" = "ADT_0",
+                            "ADT_time:3" = "ADT_3",
+                            "ADT_time:6" = "ADT_6",
+                            "PAP_time:0" = "Vaccine_0",
+                            "PAP_time:3" = "Vaccine_3",
+                            "PAP_time:6" = "Vaccine_6"))
+
+# sort order of patients in boxplot
+median_long_proj2$id_time <- factor(median_long_proj2$id_time, levels = c(
+  unique(median_long_proj2$id_time[median_long_proj2$treat_time == "ADT_time:0"]),
+  unique(median_long_proj2$id_time[median_long_proj2$treat_time == "ADT_time:3"]),
+  unique(median_long_proj2$id_time[median_long_proj2$treat_time == "ADT_time:6"]),
+  unique(median_long_proj2$id_time[median_long_proj2$treat_time == "PAP_time:0"]),
+  unique(median_long_proj2$id_time[median_long_proj2$treat_time == "PAP_time:3"]),
+  unique(median_long_proj2$id_time[median_long_proj2$treat_time == "PAP_time:6"])
+))
+
+ggplot(median_long_proj2, aes(x = id_time, y = fluorescence, fill = treat_time)) +
+  geom_boxplot(outlier.shape = ".") +
+  scale_fill_manual(name = "treatment_time", values = pal_proj2[levels(median_long_proj2$treat_time)]) +
+  labs(title = "Boxplots of Peptide Fluorescence Levels for Patients at 3 time points", 
+       x = "Patient_Time", y = "Median log2 Fluorescence Levels") +
+  theme(panel.background = element_rect(fill = "grey90"),
+        panel.grid.major = element_line(color = "white"),
+        panel.grid.minor = element_line(color = "white"),
+        axis.text.x = element_text(angle = 90, hjust = 1, size = 4.3),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+```
+
+It appears that the fluorescence levels of the peptides are normalized. 
+
+## Tests on Time Effect
+
+To analyze how the two treatments (PAP or ADT) induces changes in antibody responses in individuals over time, we analyze the time effect of treatments in the patients for this study separately for the PAP group and for the ADT group. Specifically, for each peptide and each of the two treatment groups (consisting of 20 patients), we fit the following linear mixed model 
+
+$$
+y_{i\tau} = \beta_0 + \beta_1 \tau + b_{0i} + b_{1i} \tau + \epsilon_{i},  
+$$
+where  
+
+* $y_{i \tau}$ be the median fluorescence level on $\log_2$ scale for the $i^{th}$ patient at time $\tau$
+* $i = 1, \cdots, 20$ and $\tau$ = 0, 3 or 6 months
+* $\beta_0$ = the baseline antibody response level for all patients in the treatment group
+* $b_{0i}$ is the random intercept of the $j^{th}$ patient
+* $b_{1j}$ is the random slope of the $j^{th}$ patient
+* $\left( \begin{smallmatrix} b_{0i} \\ b_{1i} \\ \epsilon_i \end{smallmatrix} \right)$ $\sim N_3$ $\left( \left[ \begin{smallmatrix} 0 \\ 0 \\ 0 \end{smallmatrix} \right] , \Sigma = \left[ \begin{smallmatrix} \sigma_0^2 & \rho \sigma_0 \sigma_1 & 0 \\ \rho \sigma_0 \sigma_1 & \sigma_1^2 & 0 \\ 0 & 0 & \sigma^2_{\epsilon} \end{smallmatrix} \right] \right)$  
+
+For each peptide and for each treatment group, we test the following:  
+
+$H_0$: $\beta_1 = 0$, ie. Treatment does not induce changes in antibody response over time.  
+$H_1$: $\beta_1 \neq 0$, ie. Treatment induces changes in antibody response over time.  
+
+**Rationale of the model**:  Since each patient has multiple measurements, the random effects of the mixed model allow us to capture the within-subject interdepencies. Every patient's antibody response is unique and possibly changes across time due to individual circumstances, so we want our model to include random intercept (representing patient-specific randomness) and random slope (of time). Since measurements were taken across only 3 time points, we refrain from considering more complicated terms involving time effect (eg. higher-order polynomial function of time).  
+
+**Model-fitting and Test Statistics**: Hypothesis testing in linear mixed-models is still an active area of research. Due to the large number of peptides, any non-parametric tests like permutation tests (shuffling treatment identifiers among patients by respecting time blocks) are prohibitively expensive in terms of computation. There are three usual parametric approximate tests for fixed effects in linear mixed models:  
+
+* Kenward-Roger (KR) approximate F-test, with model estimates fitted using the Restricted Maximum Likelihood (REML) approach,
+* Satterthwaite approximate F-test, with model estimates also fitted with REML, and
+* likelihood ratio test (LRT), with model estimates fitted using the usual Maximum Likelihood (ML) approach.  
+
+Roughly, unlike the ML approach, the REML method gives unbiased estimate of $\widehat{\Sigma}$. This is imperative, since $\widehat{\Sigma}$ feeds into the F-test calculations. Both Kenward_Roger and Satterthwaite approximations aim to adjust the degrees-of-freedom in the F-test to account for the additional estimation of covariance terms in the random effects of mixed models, as compared to a vanilla F-test in basic linear models. Likelihood ratio test is only meaningful when parameter estimates are fitted with ML, otherwise the likelihood ratio test statistic may even end up as a negative value.  
+
+The consensus is that likelihood ratio test (LRT) could be slightly more liberal than the other two methods. KR and Satterthwaite approximations usually give comparable results, and the Satterthwaite method is also the default linear-mixed-model setting in SAS and in the R package *lmerTest*. We deploy only the KR and Satterthwaite approximate F-tests and compare their p-values. We zoom-in the plots to consider p-values $\leq 0.2$. 
+
+```{r}
+PAP_Satterth_Ftest_pval <- PAP_result[,"PAP_Satterthwaite_Ftest_pval"]
+PAP_KR_Ftest_pval <- PAP_result[,"PAP_KR_Ftest_pval"]
+ADT_Satterth_Ftest_pval <- ADT_result[,"ADT_Satterthwaite_Ftest_pval"]
+ADT_KR_Ftest_pval <- ADT_result[,"ADT_KR_Ftest_pval"]
+
+PAP_Ftest_KR_BH <- p.adjust(PAP_KR_Ftest_pval, method="BH")
+PAP_Ftest_Satterthwaite_BH <- p.adjust(PAP_Satterth_Ftest_pval, method="BH")
+ADT_Ftest_KR_BH <- p.adjust(ADT_KR_Ftest_pval,method="BH")
+ADT_Ftest_Satterthwaite_BH <- p.adjust(ADT_Satterth_Ftest_pval,method="BH")
+```
+
+```{r, fig.height = 5, fig.width = 8, cache = T, dependson=c("PAP_Satterth_Ftest_pval", "PAP_KR_Ftest_pval", "ADT_Satterth_Ftest_pval", "ADT_KR_Ftest_pval")}
+par(mfrow=c(1,2))
+plot(PAP_Satterth_Ftest_pval, 
+     PAP_KR_Ftest_pval, 
+     pch = ".", xlim = c(0,.2), ylim = c(0,.2), las = 1, 
+     main = "Time Fixed Effect p-values \nfor PAP patients",
+     xlab = "Satterthwaite F-test p-values", ylab = "Kenward-Roger (KR) F-test p-values")
+abline(a=0, b=1, col = "red", lty=2, lwd = 2)
+
+plot(ADT_Satterth_Ftest_pval, 
+     ADT_KR_Ftest_pval, 
+     pch = ".", xlim = c(0,.2), ylim = c(0,.2), las = 1, 
+     main = "Time Fixed Effect p-values \nfor ADT patients",
+     xlab = "Satterthwaite F-test p-values", ylab = "Kenward-Roger (KR) F-test p-values")
+abline(a=0, b=1, col = "red", lty=2, lwd = 2)
+```
+
+It appears that the KR-approximation is more conservative than the Satterthwaite approximation in most cases. We also plot the density histograms of both sets of F-test p-values for both treatment groups at the same scale. 
+
+```{r, fig.height=4}
+KR_Ftest_pval_df <- data.frame(
+  treatment = c(
+    rep("PAP", 177604*2),
+    rep("ADT", 177604*2)
+  ), 
+  method = rep( rep( c("Satterthwaite", "Kenward-Roger"), each = 177604 ), 2) ,
+  p_values = c(
+    PAP_Satterth_Ftest_pval,
+    PAP_KR_Ftest_pval,
+    ADT_Satterth_Ftest_pval,
+    ADT_KR_Ftest_pval
+  )
+)
+
+ggplot(KR_Ftest_pval_df, aes(x = p_values, fill = method)) +
+  geom_histogram(aes(y=..density..), bins = 100, position = "identity", alpha = .4) +
+  facet_grid(. ~ treatment) +
+  labs(x = "F-test p-values", title = paste0("Density Histograms of F-test p-values")) + 
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = "bottom")
+```
+
+Again, the KR F-test p-values are slightly more conservative than the Satterthwaite approximation for the PAP patients. Where the ADT group is concerned, the p-value histograms are relatively flat for both approximation methods. After applying the BH method, no peptides from the ADT group are found to be significant even at 20\% FDR for either of the two approximation methods. For the PAP group, we tabulate the peptide counts at various BH FDR thresholds.
+
+```{r}
+Ftest_pval_counts <- data.frame(
+  BH_FDR_thresholds = seq(.01, .05, by = .01),
+  Peptide_counts_KR = count.func(PAP_Ftest_KR_BH, seq(.01,.05,by=.01))[2,2:6],
+  Peptide_counts_Satterthwaite = count.func(PAP_Ftest_Satterthwaite_BH, seq(.01,.05,by=.01))[2,2:6]
+)
+
+kable(Ftest_pval_counts, row.names = F, booktabs = T, linesep = "", align = "ccc") %>%
+  kable_styling(position = "center")
+```
+
+```{r}
+BH_FDR_cutoff_proj2 <- .05
+signif_crit_proj2 <- (PAP_Ftest_KR_BH <= BH_FDR_cutoff_proj2) & 
+  (PAP_Ftest_Satterthwaite_BH <= BH_FDR_cutoff_proj2) &
+  (PAP_result[,"PAP_time_effect"] > .3333)
+
+proj2_signif_count <- sum(as.numeric(signif_crit_proj2))
+```
+
+For instance, out of the 63747 peptides at 5\% FDR based on KR p-values, 35034 of them are among the 63745 peptides at 5\% FDR based on the Satterthwaite p-values. Where the PAP group is concerned, we will only consider peptides that meet **5\% BH FDR cut-off for both KR and Satterthwaite methods**. In addition, we are only interested in peptides that demonstrate **at least two-fold increase in fluorescence after every 3-months, ie. $\beta_1 \geq 0.3333$**. There are `r proj2_signif_count` peptides which meet these two requirements. The list of these peptides is also exported to the sheet "*PAP_Longitudinal*" in the Excel file "*09_Significant_Peptides.xlsx*".    
+
+## Visualization
+
+We first obtain the volcano plots of $-\log_{10}$ (KR) F-test p-values versus $\hat{\beta}_1$ for the PAP and ADT groups at the same scale. The `r proj2_signif_count` significant peptides that meet the 5\% BH FDR and estimated time effect cut-offs are colored red. The vertical blue dashed line represents the $0.3333$ threshold of estimated coefficient of time fixed effect.  
+
+The volcano plots corroborate with the patterns we observe from the p-value density histograms. More patients in the PAP groups exhibit more significantly higher changes in antibody responses over time. 
+
+```{r, fig.height=5, fig.width=8}
+proj2_volcano_plot.func <- function(time_effect, pval, BH, title){
+  plot(x = time_effect, y = -log10(pval), pch = ".", las = 1,
+       ylim = c(0,9), xlim = c(-.4, .9),
+       xlab = "coefficient of time fixed effect", ylab = "-log10(KR F-test p-values)",
+       main = title)
+  lines(x = time_effect[ BH <= .01 & time_effect >= .3333 ], 
+        y = -log10(pval[ BH <= .01 & time_effect >= .3333]),
+        type = "p", pch = ".", col = "red")
+}
+
+par(mfrow=c(1,2))
+proj2_volcano_plot.func(PAP_result[,"PAP_time_effect"], PAP_result[,"PAP_KR_Ftest_pval"], PAP_Ftest_KR_BH,
+                  "PAP's volcano plot")
+abline(v = .3333, lty = 2, lwd = 1.5, col = "blue")
+proj2_volcano_plot.func(ADT_result[,"ADT_time_effect"], ADT_result[,"ADT_KR_Ftest_pval"], ADT_Ftest_KR_BH,
+                  "ADT's volcano plot")
+```
+
+Next, we will illustrate the time fixed effect for the PAP patients among these `r proj2_signif_count` significant peptides via a heatmap. First, we obtain the estimated residuals from null model, ie. for each of the `r proj2_signif_count` peptides among the PAP patients, we fit the model
+
+$$
+y_{i\tau} = \beta_0 + b_{0i} + b_{1i} \tau + \epsilon_{i},  
+$$
+(which corresponds to setting $\beta_1 = 0$) and obtain the residuals for the PAP patients. All the other terms in the model are left unchanged so they retain the same explanation from above. Any pattern among these residuals will demonstate the time fixed effect not covered in the null model.  
+
+The fluorescence residuals are then winsorized at -1.7 and 1.7, which correspond to roughly bottom 5\% and top 5\% of the residuals. We then use these winsorized fluorescence residuals to plot the heatmap without any row-wise scaling. The color scheme of the heatmap is specified as navy for -1.7 which gradually transitions to firebrick for 1.7. Note that the order of the patients are the same across the 3 time points to show how these individuals' antibody response changes over time. Overall, the heatmap clearly illustrates that the individuals' antibody response levels increase over time.   
+
+```{r}
+proj2_resid <- PAP_resid_fit0[signif_crit_proj2,]
+proj2_resid_time <- sample_key_proj2$time[sample_key_proj2$treatment=="Vaccine"]
+
+# specify color scheme
+cls <- colorRampPalette(c("navy", "honeydew", "firebrick1"))(n = 1024)
+proj2_heatmap_pal <- c("lightgoldenrod1", "darkorange1", "brown")
+names(proj2_heatmap_pal) <- c(0,3,6)
+cols <- proj2_heatmap_pal[ match(proj2_resid_time, names(proj2_heatmap_pal)) ]
+
+# winsorize
+proj2_resid_winsorize <- t( apply(proj2_resid, 1, function(x){
+  x[x < -1.7] = -1.7
+  x[x > 1.7] = 1.7
+  return(x)
+}) )
+```
+
+```{r, fig.height = 10, fig.width = 8, fig.show = 'hide', cache = T, dependson=c("proj2_resid_winsorize, proj2_resid_time", "proj2_resid")}
+proj2_get_column_order.func <- function(resid_mat, Time){
+  heat_map <- heatmap3(resid_mat[,proj2_resid_time == Time],col = cls, labRow = "", scale = "none", 
+                       showColDendro = F, showRowDendro = F)
+  return( colnames(resid_mat[,proj2_resid_time == Time])[heat_map$colInd] )
+}
+time6_order <- proj2_get_column_order.func(proj2_resid_winsorize,6)
+time0_order <- gsub("time:6", "time:0", time6_order)
+time3_order <- gsub("time:6", "time:3", time6_order)
+time_order <- match( c(time0_order, time3_order, time6_order), colnames(proj2_resid) )
+```
+
+```{r, fig.height = 10, fig.width = 8, cache = T, dependson=c("proj2_resid_winsorize", "time_order")}
+heatmap3(proj2_resid_winsorize[,time_order], 
+         col = cls, # specify colors 
+         ColSideColors = cols[time_order], # specify time color code
+         Colv = NA,
+         scale = "none", # no scaling by row
+         labCol = colnames(proj2_resid_winsorize)[time_order], # specify patient_time
+         ColSideLabs = "Time", 
+         labRow = "",
+         xlab = "Patient_Time",
+         legendfun=function() showLegend(col = proj2_heatmap_pal,
+                                         legend = c("Time 0",  "Time 3", "Time 6"),
+                                         cex = 1.2,
+                                         lwd = 5  )
+)
+```
+
+## Gene-Set-Analysis
+
+# Conclusion
