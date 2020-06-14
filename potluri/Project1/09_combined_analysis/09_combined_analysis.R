@@ -75,6 +75,7 @@ get_alleztable.func <- function(allez_go_input){
 
 load("09_Cancer_Stage_Effects.RData")
 load("09_LMER_results.RData")
+load("09_allez_results.RData")
 raw_data_median <- read_csv("raw_data_median.csv")
 raw_data_median_proj2 <- read_csv("raw_data_median_proj2.csv")
 

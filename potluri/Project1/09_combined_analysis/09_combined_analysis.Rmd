@@ -108,9 +108,19 @@ anova_func <- function(anova_pval, xlab){
   return(list(anova_BH = anova_BH, anova_qval = anova_qval, anova_qval_eta0 = anova_qval_eta0))
 }
 
+# post-process allez table for kable output
+get_alleztable.func <- function(allez_go_input){
+  allez.tab <- allezTable(allez_go_input, symbol = T, nominal.alpha = nom.alpha, n.upp = max_gene_in_set, in.set = T)
+  allez.tab$set.size <- paste(allez.tab$in.set, allez.tab$set.size, sep = "/")
+  allez.tab <- allez.tab %>% dplyr::select(-c(in.set, genes)) %>%
+    mutate(in.genes = str_replace_all(in.genes, ";", "; "))
+  return(allez.tab)
+}
+
 
 load("09_Cancer_Stage_Effects.RData")
 load("09_LMER_results.RData")
+load("09_allez_results.RData")
 raw_data_median <- read_csv("raw_data_median.csv")
 raw_data_median_proj2 <- read_csv("raw_data_median_proj2.csv")
 
@@ -757,6 +767,136 @@ heatmap3(anova_dat_demean_winsorize[,id_order],
 
 ## Gene-Set-Analyses
 
+```{r}
+uniprot_gene <- read_csv("uniprot_data_entrez.csv", col_types = cols_only(
+  seq_id = col_character(),
+  uniprot_id = col_character(),
+  gene_symbol = col_character(),
+  entrez_gene_id_pete = col_double(),
+  gene_names = col_character(),
+  protein_names = col_character()
+)) %>% filter(!(is.na(seq_id)) & !(is.na(entrez_gene_id_pete))) %>%
+  select(seq_id, uniprot_id, gene_symbol, entrez_gene_id_pete, gene_names, protein_names)
+
+nom.alpha <- 0.05
+max_gene_in_set <- 300
+```
+
+Here, we shall perform the gene-set analysis based on the interesting/significant peptides identified by the Wilcoxon-BH-FDR and absolute-difference-of-medians cutoffs for each contrast or pairwise comparison. Recall that the 177604 peptides correspond to 1611 proteins, and `r nrow(uniprot_gene)` of these proteins have matching genes in "*uniprot_gene_entrez.csv*". In this analysis, we deem a protein to be significant if it has at least one significant associated peptide.  
+
+Specifically, we investigate if there are any pre-specified gene-sets that are enriched for the genes associated with the list of significant peptides for each contrast or pairwise comparison. These pre-determined gene-sets are defined based on their functional categories or biological properties, such as the Gene Ontology (GO) annotations. Enriched gene-sets could reflect the biological signals in the peptide microarray data. The gene-set-analysis is performed with the R package ``allez``. We shall consider gene-sets containing at least 2 interesting/significant genes (``n.cell`` = 2) with Bonferroni-corrected enrichment p-values not exceeding 5\% (``nominal.alpha`` = 0.05) . We also limit our analysis to those GO gene-sets which contain at least 5 genes (``n.low`` = 5) and at most 300 genes (``n.upp`` = 300).  
+
+We present our gene-set-analysis results for each contrast in the following subsections.
+
+### Cancer vs Normal
+
+Recall that we identified `r wilcox_peptide_counts_df$peptide_counts[wilcox_peptide_counts_df$pairwise_comparison=="cancer vs normal"]`  interesting/significant peptides for this contrast. Based on these peptides, the gene-set-analysis yields the following waterfall plot.
+
+```{r, fig.width=9}
+allezPlot(cancer_normal_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+```
+
+The waterfall plot was constructed by finding the significant (Bonferroni-corrected p-value < 0.05) GO term having the largest overlap with genes associated with proteins that have at least one significant peptide with at least one call among all patients (cell-cell contact zone GO:0044291) and placing it in the top row of the figure. We next removed these genes from the list and found the significant GO term having the highest overlap with the remainder of the list (viral translation GO: 0019081). This process is repeated, and genes identified by this sequential process are counted along the x-axis, and the overlap between the GO terms can be visually assessed. Shading under the 'waterfall' component of the graph indicates genes that were annotated to previously named categories. 
+
+We also tabulate the enriched/overrepresented GO terms. The last column of the table shows the genes associated with proteins that have at least one significant peptide in the contrast or pairwise comparison.
+
+```{r}
+kable(get_alleztable.func(cancer_normal_allez.go), format = "latex", digits = 4, booktabs = T, longtable = T) %>%
+      kable_styling(latex_options = c("hold_position", "repeat_header"),
+                    full_width = T, font_size = 6) %>%
+      column_spec(1, width = "12em") %>%
+      column_spec(6, width = "30em")
+```
+
+### mCRPC vs others
+
+Recall that we identified `r wilcox_peptide_counts_df$peptide_counts[wilcox_peptide_counts_df$pairwise_comparison=="mCRPC vs others"]`  interesting/significant peptides for this contrast. Based on these peptides, the gene-set-analysis yields the following waterfall plot.
+
+```{r, fig.width=9}
+allezPlot(mCRPC_others_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+```
+
+Interpretation for the waterfall plot remains the same as above. We also tabulate the enriched/overrepresented GO terms. The last column of the table shows the genes associated with proteins that have at least one significant peptide in the contrast or pairwise comparison. 
+
+```{r}
+kable(get_alleztable.func(mCRPC_others_allez.go), format = "latex", digits = 4, booktabs = T, longtable = T) %>%
+      kable_styling(latex_options = c("hold_position", "repeat_header"),
+                    full_width = T, font_size = 6) %>%
+      column_spec(1, width = "12em") %>%
+      column_spec(6, width = "30em")
+```
+
+### mCRPC vs nmCRPC
+
+Recall that we identified `r wilcox_peptide_counts_df$peptide_counts[wilcox_peptide_counts_df$pairwise_comparison=="mCRPC vs nmCRPC"]`  interesting/significant peptides for this contrast. Based on these peptides, the gene-set-analysis yields the following waterfall plot.
+
+```{r, fig.width=9}
+allezPlot(mCRPC_nmCRPC_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+```
+
+Interpretation for the waterfall plot remains the same as above. We also tabulate the enriched/overrepresented GO terms. The last column of the table shows the genes associated with proteins that have at least one significant peptide in the contrast or pairwise comparison. 
+
+```{r}
+kable(get_alleztable.func(mCRPC_nmCRPC_allez.go), format = "latex", digits = 4, booktabs = T, longtable = T) %>%
+      kable_styling(latex_options = c("hold_position", "repeat_header"),
+                    full_width = T, font_size = 6) %>%
+      column_spec(1, width = "12em") %>%
+      column_spec(6, width = "30em")
+```
+
+### nmCRPC vs nmCSPC
+
+Recall that we identified `r wilcox_peptide_counts_df$peptide_counts[wilcox_peptide_counts_df$pairwise_comparison=="nmCRPC vs nmCSPC"]`  interesting/significant peptides for this contrast. Based on these peptides, the gene-set-analysis yields the following waterfall plot.
+
+```{r, fig.width=9}
+allezPlot(nmCRPC_nmCSPC_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+```
+
+Interpretation for the waterfall plot remains the same as above. We also tabulate the enriched/overrepresented GO terms. The last column of the table shows the genes associated with proteins that have at least one significant peptide in the contrast or pairwise comparison. 
+
+```{r}
+kable(get_alleztable.func(nmCRPC_nmCSPC_allez.go), format = "latex", digits = 4, booktabs = T, longtable = T) %>%
+      kable_styling(latex_options = c("hold_position", "repeat_header"),
+                    full_width = T, font_size = 6) %>%
+      column_spec(1, width = "12em") %>%
+      column_spec(6, width = "30em")
+```
+
+### nmCSPC vs new_dx
+
+Recall that we identified `r wilcox_peptide_counts_df$peptide_counts[wilcox_peptide_counts_df$pairwise_comparison=="nmCSPC vs new_dx"]`  interesting/significant peptides for this contrast. Based on these peptides, the gene-set-analysis yields the following waterfall plot.
+
+```{r, fig.width=9}
+allezPlot(nmCSPC_newdx_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+```
+
+Interpretation for the waterfall plot remains the same as above. We also tabulate the enriched/overrepresented GO terms. The last column of the table shows the genes associated with proteins that have at least one significant peptide in the contrast or pairwise comparison. 
+
+```{r}
+kable(get_alleztable.func(nmCSPC_newdx_allez.go), format = "latex", digits = 4, booktabs = T, longtable = T) %>%
+      kable_styling(latex_options = c("hold_position", "repeat_header"),
+                    full_width = T, font_size = 6) %>%
+      column_spec(1, width = "12em") %>%
+      column_spec(6, width = "30em")
+```
+
+### new_dx vs normal
+
+Recall that we identified `r wilcox_peptide_counts_df$peptide_counts[wilcox_peptide_counts_df$pairwise_comparison=="new_dx vs normal"]`  interesting/significant peptides for this contrast. Based on these peptides, the gene-set-analysis yields the following waterfall plot.
+
+```{r, fig.width=9}
+allezPlot(newdx_normal_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+```
+
+Interpretation for the waterfall plot remains the same as above. We also tabulate the enriched/overrepresented GO terms. The last column of the table shows the genes associated with proteins that have at least one significant peptide in the contrast or pairwise comparison. 
+
+```{r}
+kable(get_alleztable.func(newdx_normal_allez.go), format = "latex", digits = 4, booktabs = T, longtable = T) %>%
+      kable_styling(latex_options = c("hold_position", "repeat_header"),
+                    full_width = T, font_size = 6) %>%
+      column_spec(1, width = "12em") %>%
+      column_spec(6, width = "30em")
+```
 
 # Section II: Antibody Responses over Time after Treatments
 
@@ -1090,4 +1230,50 @@ grid.arrange(
 
 ## Gene-Set-Analysis
 
+We also perform gene-set analysis based on the `r proj2_signif_count` interesting/significant peptides identified for the PAP group. Again, the explanations for gene-set-analysis remain the same. Again, we use the same parameters for the gene-set-analysis: We shall consider gene-sets containing at least 2 interesting/significant genes (``n.cell`` = 2) with Bonferroni-corrected enrichment p-values not exceeding 5\% (``nominal.alpha`` = 0.05) . We also limit our analysis to those GO gene-sets which contain at least 5 genes (``n.low`` = 5) and at most 300 genes (``n.upp`` = 300).  
+
+The gene-set-analysis yields the following waterfall plot. Interpretation for the waterfall plot is similar as before.
+
+```{r, fig.width=9}
+nom.alpha <- 0.05
+max_gene_in_set <- 300
+
+allezPlot(PAP_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+```
+
+We also tabulate the enriched/overrepresented GO terms. The last column of the table shows the genes associated with proteins that have at least one significant peptide in the contrast or pairwise comparison. 
+
+```{r}
+kable(get_alleztable.func(PAP_allez.go), format = "latex", digits = 4, booktabs = T, longtable = T) %>%
+      kable_styling(latex_options = c("hold_position", "repeat_header"),
+                    full_width = T, font_size = 6) %>%
+      column_spec(1, width = "12em") %>%
+      column_spec(6, width = "30em")
+```
+
 # Conclusion
+
+To investigate whether different prostate cancer stages lead to different antibody responses:  
+
+* We utilized both calls data and median fluorescence (across replicates) data.
+* Calls data is very conservative -- most calls are zero and nothing interesting pops up.
+* For median fluorescence data, we deployed the Kruskal-Wallis tests and performed the Benjamini-Hochberg (BH) procedure to control for false discovery rate (FDR). With this approach, we identified `r kw_FDR5prct` peptides at $5 \%$ FDR.
+* For these `r kw_FDR5prct` peptides, we zoomed-in on the following 6 contrasts or pairwise-comparisons. For each contrast, we deployed the Wilcoxon-Rank-Sum tests and performed the BH procedure on these `r kw_FDR5prct` Wilcoxon p-values. We are interested in peptides that meet the $5 \%$ BH-FDR cutoff based on these Wilcoxon p-values as well as having at least a two-fold difference between the medians of the two groups. The counts of peptides that fulfill the two conditions are tabulated below.  
+
+```{r}
+kable(wilcox_peptide_counts_df, row.names = F, booktabs = T, linesep = "") %>%
+  kable_styling(position = "center")
+```
+* We further performed gene-set-analyses based on the peptides identified as interesting/significant for each contrast.
+* Visualization techniques via the heatmap and PCA (principal component analysis) reveal the effects of cancer stages on individuals' antibody responses.  
+
+
+To analyze how treatments (PAP vaccine or ADT) influence change in antibody responses over time,  
+
+* We deployed linear mixed effects model for each peptide, separately for the group of PAP-vaccinated patients and for the group of patients administered with ADT.  
+* We also applied the BH procedure on the F-test p-values of the time fixed effects for both groups of patients.  
+* No significant peptides are identified for the ADT group, even at $20 \%$ FDR.
+* For the PAP group, we identified `r proj2_signif_count` peptides at $5\%$  BH FDR which also exhibit at least two-fold increase in median fluorescence levels every 3 months. Gene-set analysis is also performed based on the proteins associated with this list of peptides.
+* The heatmap clearly illustrates that PAP-vaccinated patients had significantly higher antibody responses (measured by those peptides) over the course of 6 months.  
+
+The lists of significant peptides identified in both studies are exported to the Excel file "*09_Significant_Peptides.xlsx*". Boxplots of median fluorescence levels of some example peptides for different cancer stages are generated in .png images. 
