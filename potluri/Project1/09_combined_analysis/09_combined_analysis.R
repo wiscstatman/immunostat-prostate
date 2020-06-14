@@ -63,6 +63,15 @@ anova_func <- function(anova_pval, xlab){
   return(list(anova_BH = anova_BH, anova_qval = anova_qval, anova_qval_eta0 = anova_qval_eta0))
 }
 
+# post-process allez table for kable output
+get_alleztable.func <- function(allez_go_input){
+  allez.tab <- allezTable(allez_go_input, symbol = T, nominal.alpha = nom.alpha, n.upp = max_gene_in_set, in.set = T)
+  allez.tab$set.size <- paste(allez.tab$in.set, allez.tab$set.size, sep = "/")
+  allez.tab <- allez.tab %>% dplyr::select(-c(in.set, genes)) %>%
+    mutate(in.genes = str_replace_all(in.genes, ";", "; "))
+  return(allez.tab)
+}
+
 
 load("09_Cancer_Stage_Effects.RData")
 load("09_LMER_results.RData")
@@ -918,55 +927,103 @@ uniprot_gene <- read_csv("uniprot_data_entrez.csv", col_types = cols_only(
   select(seq_id, uniprot_id, gene_symbol, entrez_gene_id_pete, gene_names, protein_names)
 
 # check if seq_id & entrez_id unique
+uniprot_gene <- uniprot_gene[!(is.na(uniprot_gene$entrez_gene_id_pete)),] # just in case
 length(unique(uniprot_gene$seq_id)) == length(uniprot_gene$seq_id) # yes! unique!
 length(unique(uniprot_gene$entrez_gene_id_pete)) == length(uniprot_gene$entrez_gene_id_pete) # NOT unique
 
-uniprot_gene[ uniprot_gene$entrez_gene_id_pete %in%
-               (uniprot_gene %>%
-                  group_by(entrez_gene_id_pete) %>% 
-                  tally() %>%
-                  filter(n > 1) %>%
-                  pull(entrez_gene_id_pete)) ,]
+# which seq_id has repeated gene_symbol
+genesymb_repeat <- as.data.frame( uniprot_gene[ uniprot_gene$entrez_gene_id_pete %in%  
+                                   (uniprot_gene %>% 
+                                      group_by(entrez_gene_id_pete) %>% 
+                                      tally() %>% 
+                                      filter(n > 1) %>% 
+                                      pull(entrez_gene_id_pete)) , ] )
+
+entrez_id_repeat <- as.character( unique(genesymb_repeat$entrez_gene_id_pete) )
+
+# # check if these seq_id make the Kruskal-Wallis 5% BH FDR cutoff ?
+# genesymb_repeat$seq_id %in% raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff] # yes...fine...
+# # check if these seq_id make at least one of the secondary cutoffs ?
+# genesymb_repeat$seq_id %in% raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff][posthoc_signif_crit] # yes...fine
+# # check each contrast one by one
+# genesymb_repeat$seq_id %in% raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff][( abs(mCRPC_median - nmCRPC_median) > 1 & mCRPC_nmCRPC_wilcox_BH <= BH_FDR_cutoff ) ]
+# genesymb_repeat$seq_id %in% raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff][( abs(nmCRPC_median - nmCSPC_median) > 1 & nmCRPC_nmCSPC_wilcox_BH <= BH_FDR_cutoff ) ]
+# genesymb_repeat$seq_id %in% raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff][( abs(nmCSPC_median - newdx_median) > 1 & nmCSPC_newdx_wilcox_BH <= BH_FDR_cutoff ) ]
+# genesymb_repeat$seq_id %in% raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff][( abs(newdx_median - normal_median) > 1 & newdx_normal_wilcox_BH<= BH_FDR_cutoff ) ]
+# genesymb_repeat$seq_id %in% raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff][( abs(cancer_median - normal_median) > 1 & cancer_normal_wilcox_BH <= BH_FDR_cutoff ) ]
+# genesymb_repeat$seq_id %in% raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff][( abs(mCRPC_median - NOT_mCRPC_median) > 1 & mCRPC_others_wilcox_BH <= BH_FDR_cutoff )]
 
 
-## manually changing entrez_gene_id for PCA10 & PRO29
-uniprot_gene$entrez_gene_id_pete[uniprot_gene$seq_id == "PCA10"] <- 28912
-uniprot_gene$entrez_gene_id_pete[uniprot_gene$seq_id == "PRO29"] <- NA
-uniprot_gene <- uniprot_gene[!(is.na(uniprot_gene$entrez_gene_id_pete)),]
+# DECISION: treat them as repeats in the microarray
+# protein deemed signif if either one of the repeated seq_id makes the cutoff
 
-# CAREFUL!
-# further filter uniprot_gene to limit them to proteins associated with filtered peptides based on calls
-# uniprot_gene  <- uniprot_gene[ uniprot_gene$seq_id %in% (unique(calls$seq_id)) ,]
+get_SeqID.func <- function(diff, BH){
+  signif_seq_id <- unique( raw_data_median$SEQ_ID[all_kw$anova_BH <= BH_FDR_cutoff][abs(diff) > 1 & BH <= BH_FDR_cutoff] )
+  seq_id_ok <- as.numeric(uniprot_gene$seq_id %in% signif_seq_id)
+  names(seq_id_ok) <- uniprot_gene$entrez_gene_id_pete
+  seq_id_ok2 <- seq_id_ok[!(names(seq_id_ok) %in% entrez_id_repeat)]
+  seq_id_ok2 <- c(seq_id_ok2, sapply( entrez_id_repeat, function(x){max(seq_id_ok[which(names(seq_id_ok) == x)])} ) )
+}
 
-# get unique seq_id that are associated with significant peptides
-signif_seq_id <- unique( raw_data_median$SEQ_ID[raw_data_median$PROBE_ID %in% anova_dat$PROBE_ID] )
-signif_seq_id <- signif_seq_id[!(is.na(signif_seq_id))] # just in case
-
-# convert these into binary vector
-seq_id_ok <- as.numeric(uniprot_gene$seq_id %in% signif_seq_id)
-names(seq_id_ok) <- uniprot_gene$entrez_gene_id_pete
+cancer_normal_SeqID <- get_SeqID.func(cancer_median - normal_median, cancer_normal_wilcox_BH)
+mCRPC_others_SeqID <- get_SeqID.func(mCRPC_median - NOT_mCRPC_median, mCRPC_others_wilcox_BH)
+mCRPC_nmCRPC_SeqID <- get_SeqID.func(mCRPC_median - nmCRPC_median, mCRPC_nmCRPC_wilcox_BH)
+nmCRPC_nmCSPC_SeqID <- get_SeqID.func(nmCRPC_median - nmCSPC_median, nmCRPC_nmCSPC_wilcox_BH)
+nmCSPC_newdx_SeqID <- get_SeqID.func(nmCSPC_median - newdx_median, nmCSPC_newdx_wilcox_BH)
+newdx_normal_SeqID <- get_SeqID.func(newdx_median - normal_median, newdx_normal_wilcox_BH)
 
 # gene-set analysis via allez!
-allez.go <- allez(seq_id_ok, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
-allez.kegg <- allez(seq_id_ok, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "KEGG")
+cancer_normal_allez.go <- allez(cancer_normal_SeqID, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
+mCRPC_others_allez.go <- allez(mCRPC_others_SeqID, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
+mCRPC_nmCRPC_allez.go <- allez(mCRPC_nmCRPC_SeqID, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
+nmCRPC_nmCSPC_allez.go <- allez(nmCRPC_nmCSPC_SeqID, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
+nmCSPC_newdx_allez.go <- allez(nmCSPC_newdx_SeqID, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
+newdx_normal_allez.go <- allez(newdx_normal_SeqID, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
 
-# let's see results
+#---------------------------------------------------------------------------------------------------
+# get allez results
+
 nom.alpha <- 0.05
-min.num.gene <- 2
+max_gene_in_set <- 300
 
 # Extract a table of top-ranked functional sets from allez output
-allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha, in.set = T)[,c(1:5,7)]
-allezTable(allez.kegg, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha)[,1:4]
-
 # Display an image of gene scores by functional sets
-allezPlot(allez.go, n.cell = min.num.gene, nominal.alpha = nom.alpha)
-allezPlot(allez.kegg, n.cell = min.num.gene, nominal.alpha = nom.alpha)
 
-# tabulate enriched gene-set with signif genes only
-allez.tab <- allezTable(allez.go, symbol = T, n.cell = min.num.gene, nominal.alpha = nom.alpha, in.set = T)
-allez.tab$set.size <- paste(allez.tab$in.set, allez.tab$set.size, sep = "/")
-allez.tab <- allez.tab %>% dplyr::select(-c(in.set, genes)) %>%
-  mutate(in.genes = str_replace_all(in.genes, ";", "; "))
+# cancel vs normal
+allezTable(cancer_normal_allez.go, symbol = T, nominal.alpha = nom.alpha, n.upp = max_gene_in_set, in.set = T)[,c(1:5,7)]
+get_alleztable.func(cancer_normal_allez.go)
+allezPlot(cancer_normal_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+
+
+# mCRPC vs others
+allezTable(mCRPC_others_allez.go, symbol = T, nominal.alpha = nom.alpha, n.upp = max_gene_in_set, in.set = T)[,c(1:5,7)]
+get_alleztable.func(mCRPC_others_allez.go)
+allezPlot(mCRPC_others_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+
+
+# mCRPC vs nmCRPC
+allezTable(mCRPC_nmCRPC_allez.go, symbol = T, nominal.alpha = nom.alpha, n.upp = max_gene_in_set, in.set = T)[,c(1:5,7)]
+get_alleztable.func(mCRPC_nmCRPC_allez.go)
+allezPlot(mCRPC_nmCRPC_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+
+
+# nmCRPC vs nmCSPC
+allezTable(nmCRPC_nmCSPC_allez.go, symbol = T, nominal.alpha = nom.alpha, n.upp = max_gene_in_set, in.set = T)[,c(1:5,7)]
+get_alleztable.func(nmCRPC_nmCSPC_allez.go)
+allezPlot(nmCRPC_nmCSPC_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+
+
+# nmCSPC vs new_dx
+allezTable(nmCSPC_newdx_allez.go, symbol = T, nominal.alpha = nom.alpha, n.upp = max_gene_in_set, in.set = T)[,c(1:5,7)]
+get_alleztable.func(nmCSPC_newdx_allez.go)
+allezPlot(nmCSPC_newdx_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+
+
+# new_dx vs normal
+allezTable(newdx_normal_allez.go, symbol = T, nominal.alpha = nom.alpha, n.upp = max_gene_in_set, in.set = T)[,c(1:5,7)]
+get_alleztable.func(newdx_normal_allez.go)
+allezPlot(newdx_normal_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+
 
 ####################################################################################### 
 #                               Data Processing -- part II                            #
@@ -1110,7 +1167,7 @@ ggplot(median_long_proj2, aes(x = id_time, y = fluorescence, fill = treat_time))
         plot.title = element_text(hjust = 0.5))
 
 ####################################################################################### 
-#             Linear Mixed Model to Assess Treatment Effect (REML = TRUE)             #
+#                    Linear Mixed Model to Assess Time Effect (REML = TRUE)           #
 #                       Separate Models for PAP and ADT Groups                        #
 ####################################################################################### 
 
@@ -1388,6 +1445,31 @@ grid.arrange(
 )
 
 ####################################################################################### 
+#                               Gene Set Analyses After LMER                          #
+#######################################################################################
+
+proj2_get_SeqID.func <- function(coeff, BH){
+  signif_seq_id <- unique( raw_data_median_proj2$SEQ_ID[coeff > .3333 & BH <= BH_FDR_cutoff_proj2] )
+  seq_id_ok <- as.numeric(uniprot_gene$seq_id %in% signif_seq_id)
+  names(seq_id_ok) <- uniprot_gene$entrez_gene_id_pete
+  seq_id_ok2 <- seq_id_ok[!(names(seq_id_ok) %in% entrez_id_repeat)]
+  seq_id_ok2 <- c(seq_id_ok2, sapply( entrez_id_repeat, function(x){max(seq_id_ok[which(names(seq_id_ok) == x)])} ) )
+}
+
+# deploy allez
+PAP_SeqID <- proj2_get_SeqID.func(PAP_result[,"PAP_time_effect"], pmin(PAP_Ftest_KR_BH,PAP_Ftest_Satterthwaite_BH))
+PAP_allez.go <- allez(PAP_SeqID, lib = "org.Hs.eg", idtype = "ENTREZID", sets = "GO")
+
+# get allez result
+nom.alpha <- 0.05
+max_gene_in_set <- 300
+
+allezTable(PAP_allez.go, symbol = T, nominal.alpha = nom.alpha, n.upp = max_gene_in_set, in.set = T)[,c(1:5,7)]
+get_alleztable.func(PAP_allez.go)
+allezPlot(PAP_allez.go, nominal.alpha = nom.alpha, n.upp = max_gene_in_set)
+
+
+####################################################################################### 
 #                               Boxplot of interesting peptides                       #
 #######################################################################################
 
@@ -1648,5 +1730,15 @@ saveWorkbook(wb, "09_Significant_Peptides.xlsx")
 #      all_anova_pval,
 #      all_kw_pval,
 #      all_anova_mse,
-#      file = "07_Cancer_Stage_Effects.RData")
+#      file = "09_Cancer_Stage_Effects.RData")
+
+# save(cancer_normal_allez.go,
+#      mCRPC_others_allez.go,
+#      mCRPC_nmCRPC_allez.go,
+#      nmCRPC_nmCSPC_allez.go,
+#      nmCSPC_newdx_allez.go,
+#      newdx_normal_allez.go,
+#      PAP_allez.go,
+#      file = "09_allez_results.RData"
+# )
 
