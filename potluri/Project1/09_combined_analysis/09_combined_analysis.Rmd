@@ -523,7 +523,7 @@ The BH procedure is also performed **on the `r kw_FDR5prct` Wilcoxon p-values se
 # get group medians
 group_median.func <- function(group, BH_filter){
   raw_data_median %>% 
-    select(any_of(array_id_key$id)) %>% 
+    select(-(PROBE_DESIGN_ID:DESIGN_ID)) %>% 
     select(which(patient_key$stage %in% group)) %>%
     # filter(all_anova$anova_BH <= BH_filter) %>%
     filter(all_kw$anova_BH <= BH_filter) %>%

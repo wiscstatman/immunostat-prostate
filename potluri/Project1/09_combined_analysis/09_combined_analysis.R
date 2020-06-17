@@ -163,32 +163,27 @@ array_id_key %>%
 # # we can drop X, Y, MATCH_INDEX, DESIGN_NOTE, SELECTION_CRITERIA, MISMATCH, PROBE_CLASS
 # 
 # raw_data = raw_data %>%
-#   select(PROBE_DESIGN_ID:Y, any_of(array_id_key$array_id)) %>% # drop patients with records at different stages 
+#   select(PROBE_DESIGN_ID:Y, any_of(array_id_key$array_id)) %>% # drop patients with records at different stages
 #   select( -c(X, Y, MATCH_INDEX, DESIGN_NOTE, SELECTION_CRITERIA, MISMATCH, PROBE_CLASS) ) # drop unhelpful columns
 # 
 # colnames(raw_data)[1:15] # check
 # 
-# # extract all sequence id
-# # may need to use this for gene set analysis
-# all_seq_id <-  unique(raw_data$SEQ_ID)
-# 
-# 
 # # take log2 transformation
 # raw_data <- raw_data %>%
-#   mutate_at(vars(matches("dat")), log2)
+#   mutate_at(vars(matches(".dat")), log2)
 # 
 # 
 # # make sure array_id_key align with raw_data_complete
-# array_iii <- match( colnames( raw_data %>% select(any_of(array_id_key$array_id)) ), array_id_key$array_id )
+# array_iii <- match( colnames( raw_data %>% select(contains(".dat")) ), array_id_key$array_id )
 # array_id_key <- array_id_key[array_iii , ]
-# sum(as.numeric( colnames( raw_data %>% select(any_of(array_id_key$array_id)) ) == array_id_key$array_id )) == nrow(array_id_key)
+# sum(as.numeric( colnames( raw_data %>% select(contains(".dat")) ) == array_id_key$array_id )) == nrow(array_id_key)
 # 
 # 
 # # compute median
-# raw_data_median <- t( apply( select(raw_data, contains("dat")), 1, function(x) {
+# raw_data_median <- t( apply( select(raw_data, contains(".dat")), 1, function(x) {
 #   tapply(x, array_id_key$id, FUN=median)
 # } ) )
-# raw_data_median <- bind_cols( select(raw_data, -contains("dat")), as.data.frame(raw_data_median) ) 
+# raw_data_median <- bind_cols( select(raw_data, -contains(".dat")), as.data.frame(raw_data_median) )
 # 
 # colnames(raw_data_median)[1:15] # check
 # 
@@ -319,7 +314,7 @@ ggplot(median_long, aes(x = id, y = fluorescence, fill = stage)) +
 #      Evaluate Reproducibility of Replicates via Linear Mixed Effects Model          #         
 #######################################################################################
 
-# ncol_raw <- ncol(raw_data) 
+# ncol_raw <- ncol(raw_data)
 # nrep <- nrow(array_id_key)
 # 
 # # initiate
@@ -327,7 +322,7 @@ ggplot(median_long, aes(x = id, y = fluorescence, fill = stage)) +
 # colnames(lmer_result) <- c("variance_id", "variance_residual", "lrstat", "singularity")
 # 
 # # check array_id_key align with raw_data_complete
-# sum(as.numeric( colnames( raw_data %>% select(any_of(array_id_key$array_id)) ) == array_id_key$array_id )) == nrow(array_id_key)
+# sum(as.numeric( colnames( raw_data[,(ncol_raw - nrep + 1) : ncol_raw] ) == array_id_key$array_id )) == nrow(array_id_key)
 # 
 # 
 # for(i in 1:nrow(raw_data)){
@@ -357,16 +352,17 @@ hist(lmer_var_ratio, breaks = 100, xlab = "estimated proportion of variances",
 #                               TEST  -- Logistic Regression                          #
 ####################################################################################### 
 
+# ncol_calls <- ncol(calls)
+# n <- nrow(patient_key)
+# 
 # # make sure patients' stages align with calls
-# calls_iii <- match( colnames( calls %>% select(any_of(patient_key$id)) ), patient_key$id )
+# calls_iii <- match( colnames( calls[,(ncol_calls - n + 1): ncol_calls] ), patient_key$id )
 # calls_stages <- (patient_key$stage)[calls_iii]
-# sum(as.numeric( colnames( calls %>% select(any_of(patient_key$id)) ) == (patient_key$id)[calls_iii] )) == nrow(patient_key)
+# sum(as.numeric( colnames( calls[,(ncol_calls - n + 1): ncol_calls] ) == (patient_key$id)[calls_iii] )) == nrow(patient_key)
 # 
 # # initiate
 # logreg_pval <- rep(NA, nrow(calls))
 # names(logreg_pval) <- calls$PROBE_ID
-# ncol_calls <- ncol(calls)
-# n <- nrow(patient_key)
 # 
 # # compute deviance test p-values
 # for(i in 1:nrow(calls)){
@@ -396,14 +392,14 @@ count.func(logreg_qval, seq(0.01, 0.05, by = 0.01))
 #                 Another Tests -- one-way ANOVA & Kruskal-Wallis Test                #
 ####################################################################################### 
 
-# make sure patients' stages align with raw_data_median
-median_iii <- match( colnames(select( raw_data_median, any_of(array_id_key$id) )), patient_key$id )
-median_stage <- patient_key$stage[median_iii]
-median_stage <- factor(median_stage)
-sum(as.numeric( colnames(select( raw_data_median, any_of(array_id_key$id) )) == patient_key$id[median_iii] )) == nrow(patient_key)
-
 ncol_median <- ncol(raw_data_median)
 n <- nrow(patient_key)
+
+# make sure patients' stages align with raw_data_median
+median_iii <- match( colnames(raw_data_median[, (ncol_median - n + 1) : ncol_median]), patient_key$id )
+median_stage <- patient_key$stage[median_iii]
+median_stage <- factor(median_stage)
+sum(as.numeric( colnames(raw_data_median[, (ncol_median - n + 1) : ncol_median]) == patient_key$id[median_iii] )) == nrow(patient_key)
 
 #---------------------------------------------------------------------------------------
 
@@ -490,17 +486,22 @@ ANOVA_but_not_KW <- raw_data_median %>%
   select(PROBE_ID, any_of(array_id_key$id)) %>%
   as.matrix()
 
+ANOVA_but_not_KW_iii <- match( colnames(ANOVA_but_not_KW[, -1]), patient_key$id )
+ANOVA_but_not_KW_stage <- patient_key$stage[ANOVA_but_not_KW_iii]
+ANOVA_but_not_KW_stage <- factor(ANOVA_but_not_KW_stage)
+sum(as.numeric( colnames(ANOVA_but_not_KW[, -1]) == patient_key$id[ANOVA_but_not_KW_iii] )) == nrow(patient_key)
+
 par(mfrow=c(3,1))
 par(mar=c(5.1, 6.1, 4.1, 2.1))
-graphics::boxplot(as.numeric(ANOVA_but_not_KW[1,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+graphics::boxplot(as.numeric(ANOVA_but_not_KW[1,-1])~ANOVA_but_not_KW_stage, varwidth = T, horizontal = T,las= 2,
                   col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
                   main = ANOVA_but_not_KW[1,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
-graphics::boxplot(as.numeric(ANOVA_but_not_KW[2,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+graphics::boxplot(as.numeric(ANOVA_but_not_KW[2,-1])~ANOVA_but_not_KW_stage, varwidth = T, horizontal = T,las= 2,
                   col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
                   main = ANOVA_but_not_KW[2,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
-graphics::boxplot(as.numeric(ANOVA_but_not_KW[3,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+graphics::boxplot(as.numeric(ANOVA_but_not_KW[3,-1])~ANOVA_but_not_KW_stage, varwidth = T, horizontal = T,las= 2,
                   col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
-                  main = ANOVA_but_not_KW[2,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
+                  main = ANOVA_but_not_KW[3,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
 
 
 # check boxplot of peptide with very signif kruskal-wallis pval but not ANOVA pval
@@ -509,17 +510,22 @@ KW_but_not_ANOVA <- raw_data_median %>%
   select(PROBE_ID, any_of(array_id_key$id)) %>%
   as.matrix()
 
+KW_but_not_ANOVA_iii <- match( colnames(KW_but_not_ANOVA[, -1]), patient_key$id )
+KW_but_not_ANOVA_stage <- patient_key$stage[KW_but_not_ANOVA_iii]
+KW_but_not_ANOVA_stage <- factor(KW_but_not_ANOVA_stage)
+sum(as.numeric( colnames(KW_but_not_ANOVA[, -1]) == patient_key$id[KW_but_not_ANOVA_iii] )) == nrow(patient_key)
+
 par(mfrow=c(3,1))
 par(mar=c(5.1, 6.1, 4.1, 2.1))
-graphics::boxplot(as.numeric(KW_but_not_ANOVA[1,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+graphics::boxplot(as.numeric(KW_but_not_ANOVA[1,-1])~KW_but_not_ANOVA_stage, varwidth = T, horizontal = T,las= 2,
                   col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
                   main = KW_but_not_ANOVA[1,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
-graphics::boxplot(as.numeric(KW_but_not_ANOVA[2,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+graphics::boxplot(as.numeric(KW_but_not_ANOVA[2,-1])~KW_but_not_ANOVA_stage, varwidth = T, horizontal = T,las= 2,
                   col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
                   main = KW_but_not_ANOVA[2,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
-graphics::boxplot(as.numeric(KW_but_not_ANOVA[3,-1])~median_stage, varwidth = T, horizontal = T,las= 2,
+graphics::boxplot(as.numeric(KW_but_not_ANOVA[3,-1])~KW_but_not_ANOVA_stage, varwidth = T, horizontal = T,las= 2,
                   col = c("navy", "cornflowerblue", "turquoise1","darkorange1", "firebrick1"),
-                  main = KW_but_not_ANOVA[2,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
+                  main = KW_but_not_ANOVA[3,"PROBE_ID"], xlab = "log2(fluorescence)", ylab = "")
 
 #---------------------------------------------------------------------------------------
 # PCA after Kruskal-Wallis
@@ -582,7 +588,7 @@ BH_FDR_cutoff <- .05
 # get group medians
 group_median.func <- function(group, BH_filter){
   raw_data_median %>% 
-    select(any_of(array_id_key$id)) %>% 
+    select(-(PROBE_DESIGN_ID:DESIGN_ID)) %>% 
     select(which(patient_key$stage %in% group)) %>%
     # filter(all_anova$anova_BH <= BH_filter) %>%
     filter(all_kw$anova_BH <= BH_filter) %>%
@@ -600,7 +606,7 @@ NOT_mCRPC_median <- group_median.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"),
 # might need group means?
 # group_means.func <- function(group, BH_filter){
 #   raw_data_median %>% 
-#     select(any_of(array_id_key$id)) %>% 
+#     select(-(PROBE_DESIGN_ID:DESIGN_ID)) %>% 
 #     select(which(patient_key$stage %in% group)) %>%
 #     # filter(all_anova$anova_BH <= BH_filter) %>%
 #     filter(all_kw$anova_BH <= BH_filter) %>%
@@ -612,7 +618,7 @@ NOT_mCRPC_median <- group_median.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"),
 
 # median_subset <- raw_data_median %>%
 #   filter(all_kw$anova_BH <= BH_FDR_cutoff) %>%  # change KW BH threshold here!
-#   select(any_of(array_id_key$id)) %>%
+#   select(-(PROBE_DESIGN_ID:DESIGN_ID)) %>%
 #   as.matrix()
 # 
 # # initiate wilcox-pval
@@ -657,7 +663,7 @@ NOT_mCRPC_median <- group_median.func(c("normal", "new_dx", "nmCSPC", "nmCRPC"),
 #   )$'p.value'
 #   print(i)
 # }
-
+# 
 #----------------------------------------------------------------------------------------------
 # get the kruskal-wallis 5% BH FDR peptide counts 
 kw_FDR5prct <- length(all_kw$anova_BH[all_kw$anova_BH <= .05])
@@ -1060,9 +1066,9 @@ sample_key_proj2 <- sample_key_proj2 %>%
   left_join(array_id_key_proj2 %>% select(id, treatment) %>% distinct())
 
 # check
-sum(as.numeric( colnames(raw_data_median_proj2 %>% select(contains("time:"))) ==
+sum(as.numeric( colnames(raw_data_median_proj2 %>% select(-(PROBE_DESIGN_ID:DESIGN_ID))) ==
                   paste( paste0("id:", sample_key_proj2$id), paste0("time:", sample_key_proj2$time), sep = "_" ) )) == 
-  ncol(raw_data_median_proj2 %>% select(contains("time:")))
+  ncol(raw_data_median_proj2 %>% select(-(PROBE_DESIGN_ID:DESIGN_ID)))
 
 #----------------------------------------------------------------------------------------
 # read fluorescence data
@@ -1070,7 +1076,7 @@ sum(as.numeric( colnames(raw_data_median_proj2 %>% select(contains("time:"))) ==
 # raw_data = read_csv("raw_data_complete.csv")
 # 
 # raw_data = raw_data %>%
-#   select(PROBE_DESIGN_ID:Y, any_of(array_id_key_proj2$array_id)) %>% # drop patients with records at different stages 
+#   select(PROBE_DESIGN_ID:Y, any_of(array_id_key_proj2$array_id)) %>% # drop patients with records at different stages
 #   select( -c(X, Y, MATCH_INDEX, DESIGN_NOTE, SELECTION_CRITERIA, MISMATCH, PROBE_CLASS) ) # drop unhelpful columns
 # 
 # # check
@@ -1081,13 +1087,13 @@ sum(as.numeric( colnames(raw_data_median_proj2 %>% select(contains("time:"))) ==
 #   mutate_at(vars(matches("dat")), log2)
 # 
 # # check any NA's
-# raw_data %>% 
-#   select_if(function(x) any(is.na(x))) 
+# raw_data %>%
+#   select_if(function(x) any(is.na(x)))
 # 
 # # make sure array_id_key_proj2 align with raw_data_complete
-# array_iii <- match( colnames( raw_data %>% select(any_of(array_id_key_proj2$array_id)) ), array_id_key_proj2$array_id )
+# array_iii <- match( colnames( raw_data %>% select(contains("dat")) ), array_id_key_proj2$array_id )
 # array_id_key_proj2 <- array_id_key_proj2[array_iii , ]
-# sum(as.numeric( colnames( raw_data %>% select(any_of(array_id_key_proj2$array_id)) ) 
+# sum(as.numeric( colnames( raw_data %>% select(contains("dat")) )
 #                 == array_id_key_proj2$array_id )) == nrow(array_id_key_proj2)
 # 
 # 
@@ -1095,20 +1101,21 @@ sum(as.numeric( colnames(raw_data_median_proj2 %>% select(contains("time:"))) ==
 # raw_data_median_proj2 <- t( apply( select(raw_data, contains("dat")), 1, function(x) {
 #   as.vector( tapply( as.numeric(x), list(array_id_key_proj2$id, array_id_key_proj2$time), FUN=median) )
 # } ) )
-# raw_data_median_proj2 <- bind_cols( select(raw_data, -contains("dat")), as.data.frame(raw_data_median_proj2) ) 
+# raw_data_median_proj2 <- bind_cols( select(raw_data, -contains("dat")), as.data.frame(raw_data_median_proj2) )
 # 
 # colnames(raw_data_median_proj2)[1:15] # check
 # 
 # # want to rename column
-# example_row <- tapply( as.numeric(select(raw_data, contains("dat"))[1,]), 
-#                        list(array_id_key_proj2$id, array_id_key_proj2$time), FUN=median) %>% 
-#   as.data.frame() %>% 
-#   rownames_to_column("id") %>% 
-#   pivot_longer(-id, names_to = "time", values_to = "fluorescence") %>% 
+# example_row <- tapply( as.numeric(select(raw_data, contains("dat"))[1,]),
+#                        list(array_id_key_proj2$id, array_id_key_proj2$time), FUN=median) %>%
+#   as.data.frame() %>%
+#   rownames_to_column("id") %>%
+#   pivot_longer(-id, names_to = "time", values_to = "fluorescence") %>%
 #   arrange(time, id)
-# sum(as.numeric( example_row$fluorescence == select(raw_data_median_proj2, contains("V"))[1,] )) == nrow(example_row) 
+# sum(as.numeric( example_row$fluorescence == select(raw_data_median_proj2, contains("V"))[1,] )) == nrow(example_row)
 # example_row$column_name <- paste( paste0("id:", example_row$id), paste0("time:", example_row$time), sep = "_" )
-# raw_data_median_proj2 <- raw_data_median_proj2 %>% rename_at(vars(contains("V")), ~ example_row$column_name) 
+# raw_data_median_proj2 <- raw_data_median_proj2 %>% rename_at(vars(contains("V")), ~ example_row$column_name)
+# # colnames(raw_data_median_proj2)[11:130] <- example_row$column_name 
 # 
 # # make sure sample_key_proj2 align with raw_data_median_proj2
 # sample_key_proj2 <- sample_key_proj2 %>%
@@ -1116,7 +1123,7 @@ sum(as.numeric( colnames(raw_data_median_proj2 %>% select(contains("time:"))) ==
 #   arrange(time, id)
 # sum(as.numeric(sample_key_proj2$id == example_row$id)) == nrow(sample_key_proj2) # check
 # sum(as.numeric(sample_key_proj2$time == example_row$time)) == nrow(sample_key_proj2) # check
-# sample_key_proj2 <- sample_key_proj2 %>% 
+# sample_key_proj2 <- sample_key_proj2 %>%
 #   left_join(array_id_key_proj2 %>% select(id, treatment) %>% distinct())
 # 
 # write.table(raw_data_median_proj2, file = "raw_data_median_proj2.csv", sep = ",", row.names = F)
@@ -1172,84 +1179,86 @@ ggplot(median_long_proj2, aes(x = id_time, y = fluorescence, fill = treat_time))
 #                       Separate Models for PAP and ADT Groups                        #
 ####################################################################################### 
 
-# ncol_med_proj2 <- ncol(raw_data_median_proj2) 
-# n_med_proj2 <- nrow(sample_key_proj2)
-# 
-# # initiate
-# PAP_resid_fit0 <- matrix(NA, nrow = nrow(raw_data_median_proj2), 
-#                          ncol = nrow(sample_key_proj2%>%filter(treatment == "Vaccine")))
-# ADT_resid_fit0 <- matrix(NA, nrow = nrow(raw_data_median_proj2), 
-#                          ncol = nrow(sample_key_proj2%>%filter(treatment == "ADT")))
-# PAP_result <- matrix(NA, nrow = nrow(raw_data_median_proj2), ncol = 8)
-# ADT_result <- matrix(NA, nrow = nrow(raw_data_median_proj2), ncol = 8)
-# 
-# colnames(PAP_resid_fit0) <- colnames(raw_data_median_proj2 %>% select(contains("id:pap")))
-# colnames(ADT_resid_fit0) <- colnames(raw_data_median_proj2 %>% select(contains("id:adt")))
-# colnames(PAP_result) <- paste0("PAP_", c(
-#   "time_effect", 
-#   "time_tstat",
-#   "KR_df",
-#   "KR_Ftest_pval",
-#   "Satterthwaite_df",
-#   "Satterthwaite_Ftest_pval",
-#   "zval_1sided_KR",
-#   "zval_1sided_Satterthwaite"
-# ))
-# colnames(ADT_result) <- paste0("ADT_", c(
-#   "time_effect", 
-#   "time_tstat",
-#   "KR_df",
-#   "KR_Ftest_pval",
-#   "Satterthwaite_df",
-#   "Satterthwaite_Ftest_pval",
-#   "zval_1sided_KR",
-#   "zval_1sided_Satterthwaite"
-# ))
-# 
-# Test_Time.func <- function(y, treat_type){
-#   resp <- y[sample_key_proj2$treatment == treat_type]
-#   fit1 <- lmer(resp ~ time + (1 + time | id), REML = T, 
-#                data = sample_key_proj2[sample_key_proj2$treatment == treat_type,])
-#   fit0 <- lmer(resp ~ 1 + (1 + time | id), REML = T, 
-#                data = sample_key_proj2[sample_key_proj2$treatment == treat_type,])
-#   resid_fit0 <- unname(round(resid(fit0),4))
-#   effect_tstat <- coef(summary(fit1))['time',c('Estimate', 't value')] 
-#   KR_df_pval <- contest(fit1, c(0,1), ddf = "Kenward-Roger")[c('DenDF', 'Pr(>F)')] 
-#   Satterthwaite_df_pval <- contest(fit1, c(0,1))[c('DenDF', 'Pr(>F)')] 
-#   zval_1sided_KR <- qnorm(pt( as.numeric(effect_tstat['t value']), 
-#                               df = as.numeric(KR_df_pval['DenDF']) ,  lower.tail = T ))
-#   zval_1sided_Satterthwaite <- qnorm(pt( as.numeric(effect_tstat['t value']), 
-#                                          df = as.numeric(Satterthwaite_df_pval['DenDF']) ,  lower.tail = T ))
-#   result <- c(
-#     as.numeric(effect_tstat), 
-#     as.numeric(KR_df_pval),
-#     as.numeric(Satterthwaite_df_pval),
-#     zval_1sided_KR,
-#     zval_1sided_Satterthwaite
-#   )
-#   return( list(
-#     resid_fit0 = resid_fit0,
-#     result = result
-#   ) )
-# }
-# 
-# 
-# for(i in 1:nrow(raw_data_median_proj2)){
-#   y <- as.numeric(raw_data_median_proj2[i, (ncol_med_proj2 - n_med_proj2 + 1) : ncol_med_proj2])
-#   PAP_test <- Test_Time.func(y, "Vaccine")
-#   ADT_test <- Test_Time.func(y, "ADT")
-#   
-#   PAP_resid_fit0[i,] <- PAP_test$resid_fit0
-#   PAP_result[i,] <- PAP_test$result
-#   
-#   ADT_resid_fit0[i,] <- ADT_test$resid_fit0
-#   ADT_result[i,] <- ADT_test$result
-#   
-#   if(i %% 100 == 0){
-#     print(i)
-#   }
-# }
-# 
+ncol_med_proj2 <- ncol(raw_data_median_proj2)
+n_med_proj2 <- nrow(sample_key_proj2)
+
+# initiate
+PAP_resid_fit0 <- matrix(NA, nrow = nrow(raw_data_median_proj2),
+                         ncol = nrow(sample_key_proj2%>%filter(treatment == "Vaccine")))
+ADT_resid_fit0 <- matrix(NA, nrow = nrow(raw_data_median_proj2),
+                         ncol = nrow(sample_key_proj2%>%filter(treatment == "ADT")))
+PAP_result <- matrix(NA, nrow = nrow(raw_data_median_proj2), ncol = 8)
+ADT_result <- matrix(NA, nrow = nrow(raw_data_median_proj2), ncol = 8)
+
+colnames(PAP_resid_fit0) <- colnames(raw_data_median_proj2 %>% select(contains("id:pap")))
+# colnames(PAP_resid_fit0) <- colnames(raw_data_median_proj2[,(ncol_med_proj2 - n_med_proj2 + 1) : ncol_med_proj2])[sample_key_proj2$treatment == "Vaccine"] 
+colnames(ADT_resid_fit0) <- colnames(raw_data_median_proj2 %>% select(contains("id:adt")))
+# colnames(ADT_resid_fit0) <- colnames(raw_data_median_proj2[,(ncol_med_proj2 - n_med_proj2 + 1) : ncol_med_proj2])[sample_key_proj2$treatment == "ADT"] 
+colnames(PAP_result) <- paste0("PAP_", c(
+  "time_effect",
+  "time_tstat",
+  "KR_df",
+  "KR_Ftest_pval",
+  "Satterthwaite_df",
+  "Satterthwaite_Ftest_pval",
+  "zval_1sided_KR",
+  "zval_1sided_Satterthwaite"
+))
+colnames(ADT_result) <- paste0("ADT_", c(
+  "time_effect",
+  "time_tstat",
+  "KR_df",
+  "KR_Ftest_pval",
+  "Satterthwaite_df",
+  "Satterthwaite_Ftest_pval",
+  "zval_1sided_KR",
+  "zval_1sided_Satterthwaite"
+))
+
+Test_Time.func <- function(y, treat_type){
+  resp <- y[sample_key_proj2$treatment == treat_type]
+  fit1 <- lmer(resp ~ time + (1 + time | id), REML = T,
+               data = sample_key_proj2[sample_key_proj2$treatment == treat_type,])
+  fit0 <- lmer(resp ~ 1 + (1 + time | id), REML = T,
+               data = sample_key_proj2[sample_key_proj2$treatment == treat_type,])
+  resid_fit0 <- unname(round(resid(fit0),4))
+  effect_tstat <- coef(summary(fit1))['time',c('Estimate', 't value')]
+  KR_df_pval <- contest(fit1, c(0,1), ddf = "Kenward-Roger")[c('DenDF', 'Pr(>F)')]
+  Satterthwaite_df_pval <- contest(fit1, c(0,1))[c('DenDF', 'Pr(>F)')]
+  zval_1sided_KR <- qnorm(pt( as.numeric(effect_tstat['t value']),
+                              df = as.numeric(KR_df_pval['DenDF']) ,  lower.tail = T ))
+  zval_1sided_Satterthwaite <- qnorm(pt( as.numeric(effect_tstat['t value']),
+                                         df = as.numeric(Satterthwaite_df_pval['DenDF']) ,  lower.tail = T ))
+  result <- c(
+    as.numeric(effect_tstat),
+    as.numeric(KR_df_pval),
+    as.numeric(Satterthwaite_df_pval),
+    zval_1sided_KR,
+    zval_1sided_Satterthwaite
+  )
+  return( list(
+    resid_fit0 = resid_fit0,
+    result = result
+  ) )
+}
+
+
+for(i in 1:nrow(raw_data_median_proj2)){
+  y <- as.numeric(raw_data_median_proj2[i, (ncol_med_proj2 - n_med_proj2 + 1) : ncol_med_proj2])
+  PAP_test <- Test_Time.func(y, "Vaccine")
+  ADT_test <- Test_Time.func(y, "ADT")
+
+  PAP_resid_fit0[i,] <- PAP_test$resid_fit0
+  PAP_result[i,] <- PAP_test$result
+
+  ADT_resid_fit0[i,] <- ADT_test$resid_fit0
+  ADT_result[i,] <- ADT_test$result
+
+  if(i %% 100 == 0){
+    print(i)
+  }
+}
+
 # save(PAP_resid_fit0, ADT_resid_fit0, PAP_result, ADT_result,
 #      file = "08_LMER_results.RData")
 
