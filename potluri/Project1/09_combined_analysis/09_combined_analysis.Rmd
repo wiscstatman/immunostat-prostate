@@ -8,6 +8,9 @@ output:
   pdf_document:
     toc: true
     number_sections: true
+    citation_package: natbib
+link-citations: true
+linkcolor: blue
 header-includes:
    \usepackage{enumerate}
    \usepackage{amsmath}
@@ -259,7 +262,7 @@ where
 * $b_j$ denotes the random effect term, ie. individual patient, with $j$ indexing the patients,
 * $\epsilon_{ijk}$ denotes the (residual) random error of the model, with $k$ indexing the replicates. 
 
-This is the linear mixed-effects model, which we deploy using the R package ``lme4``. The model estimates the two sources of variation: $\hat{\sigma}^2_b$ (biological variation) and $\hat{\sigma}^2_\epsilon$ (technical variation). Ideally, biological variation should dominate technical variation since the replicates' variance $\hat{\sigma}^2_{\epsilon}$ should be minimal. Hence, we are interested in the estimated proportion of random-effect variance to total variance  
+This is the linear mixed-effects model, which we deploy using the R package ``lme4`` \citep{lme4}. The model estimates the two sources of variation: $\hat{\sigma}^2_b$ (biological variation) and $\hat{\sigma}^2_\epsilon$ (technical variation). Ideally, biological variation should dominate technical variation since the replicates' variance $\hat{\sigma}^2_{\epsilon}$ should be minimal. Hence, we are interested in the estimated proportion of random-effect variance to total variance  
 
 $$\dfrac{\hat{\sigma}^2_b}{ \hat{\sigma}^2_b + \hat{\sigma}^2_\epsilon},$$  
 
@@ -386,12 +389,12 @@ graphics::boxplot(as.numeric( raw_data_median %>%
                   main = "Peptide ID: 459_CLTC_1213;1421", xlab = "log2(fluorescence)", ylab = "")
 ```
 
-To avoid making any distributional assumptions on the fluorescence levels, we adopt the nonparamteric Kruskal-Wallis test on each of the 177,604 peptides to test:
+To avoid making any distributional assumptions on the fluorescence levels, we adopt the nonparamteric Kruskal-Wallis test \citep{biostathandbook} on each of the 177,604 peptides to test:
 
 $H_0$: The antibody responese levels (in terms of $\log_2$ fluorescence levels) for each disease stage are stochastically equal, ie. Once the fluorescence levels from all groups are ranked, the probability of an observation from one group being higher than an observation from another group is 0.5.  
 $H_1$: The antibody responese levels for at least one disease stage are stochastically dominant than those of other groups in the study.  
 
-Note that this is not a test of medians of the fluorescence levels since we are not making any distributional assumptions (shape and spread) on the fluorescence levels. 
+Note that this is not a test of medians of the fluorescence levels since we are not making any distributional assumptions (shape and spread) on the fluorescence levels \citep{biostathandbook}. 
 
 After getting p-values for all the peptides, we plot the p-value histogram.
 
@@ -402,9 +405,9 @@ all_kw <- anova_func(all_kw_pval, "Kruskal-Wallis p-values")
 
 If cancer-stage effect is not present in our peptide array data, then the p-values from the Kruskal-Wallis tests would have a uniform distribution between 0 and 1, and we expect to see a rather flat-shaped histogram of p-values.  
 
-However, the p-values histogram exhibits large counts of significant p-values (p-values close to zero), and the shape of histogram flattens off exponentially with larger p-values. Such a large count of significant p-values may not be explained by false discovery alone, and that perhaps cancer-stage effect is indeed present in some of the peptides in our profile. The red-shaded regions of the histogram represents the estimated proportion of non-null peptides in the data based on Storey's q-values calculation obtained via the R package ``fdrtool``.  
+However, the p-values histogram exhibits large counts of significant p-values (p-values close to zero), and the shape of histogram flattens off exponentially with larger p-values. Such a large count of significant p-values may not be explained by false discovery alone, and that perhaps cancer-stage effect is indeed present in some of the peptides in our profile. The red-shaded regions of the histogram represents the estimated proportion of non-null peptides in the data based on Storey's q-values \citep{StoreyFDR} calculation obtained via the R package ``fdrtool`` \citep{fdrtool}.  
 
-We apply the Benjamini-Hochberg (BH) method on the Kruskal-Wallis p-values to control for false discovery rate (FDR). The peptide counts at various BH FDR thresholds are tabulated below. 
+We apply the Benjamini-Hochberg (BH) method \citep{BHfdr} on the Kruskal-Wallis p-values to control for false discovery rate (FDR). The peptide counts at various BH FDR thresholds are tabulated below. 
 
 ```{r}
 kable( count.func(all_kw$anova_BH, seq(0.01, 0.1, by = 0.01)),
@@ -478,7 +481,7 @@ Based on the Kruskal-Wallis tests, we identified `r kw_FDR5prct` peptides for wh
 * between nmCSPC and newly-diagnosed patients
 * between newly-diagnosed and healthy subjects  
 
-For each of the `r kw_FDR5prct` peptides, we will perform a two-sided Wilcoxon-Rank-Sum (henceforth known as Wilcoxon) test for each of the 6 contrasts as mentioned above, to test the following hypothesis:  
+For each of the `r kw_FDR5prct` peptides, we will perform a two-sided Wilcoxon-Rank-Sum (henceforth known as Wilcoxon) test \citep{winner2004} for each of the 6 contrasts as mentioned above, to test the following hypothesis:  
 
 $H_0$: The antibody responses of both groups of patients are stochastically equal.  
 $H_1$: The antibody responses of both groups of patients are NOT stochastically equal.  
@@ -784,7 +787,7 @@ max_gene_in_set <- 300
 
 Here, we shall perform the gene-set analysis based on the interesting/significant peptides identified by the Wilcoxon-BH-FDR and absolute-difference-of-medians cutoffs for each contrast or pairwise comparison. Recall that the 177604 peptides correspond to 1611 proteins, and `r nrow(uniprot_gene)` of these proteins have matching genes in "*uniprot_gene_entrez.csv*". In this analysis, we deem a protein to be significant if it has at least one significant associated peptide.  
 
-Specifically, we investigate if there are any pre-specified gene-sets that are enriched for the genes associated with the list of significant peptides for each contrast or pairwise comparison. These pre-determined gene-sets are defined based on their functional categories or biological properties, such as the Gene Ontology (GO) annotations. Enriched gene-sets could reflect the biological signals in the peptide microarray data. The gene-set-analysis is performed with the R package ``allez``. We shall consider gene-sets containing at least 2 interesting/significant genes (``n.cell`` = 2) with Bonferroni-corrected enrichment p-values not exceeding 5\% (``nominal.alpha`` = 0.05) . We also limit our analysis to those GO gene-sets which contain at least 5 genes (``n.low`` = 5) and at most 300 genes (``n.upp`` = 300).  
+Specifically, we investigate if there are any pre-specified gene-sets that are enriched for the genes associated with the list of significant peptides for each contrast or pairwise comparison. These pre-determined gene-sets are defined based on their functional categories or biological properties, such as the Gene Ontology (GO) annotations. Enriched gene-sets could reflect the biological signals in the peptide microarray data. The gene-set-analysis is performed with the R package ``allez`` \citep{allez}. We shall consider gene-sets containing at least 2 interesting/significant genes (``n.cell`` = 2) with Bonferroni-corrected enrichment p-values not exceeding 5\% (``nominal.alpha`` = 0.05) . We also limit our analysis to those GO gene-sets which contain at least 5 genes (``n.low`` = 5) and at most 300 genes (``n.upp`` = 300).  
 
 We present our gene-set-analysis results for each contrast in the following subsections.
 
@@ -1007,15 +1010,15 @@ $H_1$: $\beta_1 \neq 0$, ie. Treatment induces changes in antibody response over
 
 **Rationale of the model**:  Since each patient has multiple measurements, the random effects of the mixed model allow us to capture the within-subject interdepencies. Every patient's antibody response is unique and possibly changes across time due to individual circumstances, so we want our model to include random intercept (representing patient-specific randomness) and random slope (of time). Since measurements were taken across only 3 time points, we refrain from considering more complicated terms involving time effect (eg. higher-order polynomial function of time).  
 
-**Model-fitting and Test Statistics**: Hypothesis testing in linear mixed-models is still an active area of research. Due to the large number of peptides, any non-parametric tests like permutation tests (shuffling treatment identifiers among patients by respecting time blocks) are prohibitively expensive in terms of computation. There are three usual parametric approximate tests for fixed effects in linear mixed models:  
+**Model-fitting and Test Statistics**: Hypothesis testing in linear mixed-models is still an active area of research. Due to the large number of peptides, any non-parametric tests like permutation tests (shuffling treatment identifiers among patients by respecting time blocks) are prohibitively expensive in terms of computation. There are three usual parametric approximate tests for fixed effects in linear mixed models \citep{luke2017}:  
 
 * Kenward-Roger (KR) approximate F-test, with model estimates fitted using the Restricted Maximum Likelihood (REML) approach,
 * Satterthwaite approximate F-test, with model estimates also fitted with REML, and
 * likelihood ratio test (LRT), with model estimates fitted using the usual Maximum Likelihood (ML) approach.  
 
-Roughly, unlike the ML approach, the REML method gives unbiased estimate of $\widehat{\Sigma}$. This is imperative, since $\widehat{\Sigma}$ feeds into the F-test calculations. Both Kenward_Roger and Satterthwaite approximations aim to adjust the degrees-of-freedom in the F-test to account for the additional estimation of covariance terms in the random effects of mixed models, as compared to a vanilla F-test in basic linear models. Likelihood ratio test is only meaningful when parameter estimates are fitted with ML, otherwise the likelihood ratio test statistic may even end up as a negative value.  
+Roughly, unlike the ML approach, the REML method gives unbiased estimate of $\widehat{\Sigma}$. This is imperative, since $\widehat{\Sigma}$ feeds into the F-test calculations. Both Kenward_Roger and Satterthwaite approximations aim to adjust the degrees-of-freedom in the F-test to account for the additional estimation of covariance terms in the random effects of mixed models, as compared to a vanilla F-test in basic linear models \citep{luke2017}. Likelihood ratio test is only meaningful when parameter estimates are fitted with ML, otherwise the likelihood ratio test statistic may even end up as a negative value.  
 
-The consensus is that likelihood ratio test (LRT) could be slightly more liberal than the other two methods. KR and Satterthwaite approximations usually give comparable results, and the Satterthwaite method is also the default linear-mixed-model setting in SAS and in the R package *lmerTest*. We deploy only the KR and Satterthwaite approximate F-tests and compare their p-values. We zoom-in the plots to consider p-values $\leq 0.2$. 
+The consensus is that likelihood ratio test (LRT) could be slightly more liberal than the other two methods \citep{luke2017}. KR and Satterthwaite approximations usually give comparable results, and the Satterthwaite method is also the default linear-mixed-model setting in SAS and in the R package *lmerTest* \citep{lmerTest}. We deploy only the KR and Satterthwaite approximate F-tests and compare their p-values. We zoom-in the plots to consider p-values $\leq 0.2$. 
 
 ```{r}
 PAP_Satterth_Ftest_pval <- PAP_result[,"PAP_Satterthwaite_Ftest_pval"]
@@ -1046,7 +1049,7 @@ plot(ADT_Satterth_Ftest_pval,
 abline(a=0, b=1, col = "red", lty=2, lwd = 2)
 ```
 
-It appears that the KR-approximation is more conservative than the Satterthwaite approximation in most cases. We also plot the density histograms of both sets of F-test p-values for both treatment groups at the same scale. 
+It appears that the KR-approximation is slightly more conservative than the Satterthwaite approximation in most cases. We also plot the density histograms of both sets of F-test p-values for both treatment groups at the same scale. 
 
 ```{r, fig.height=4}
 KR_Ftest_pval_df <- data.frame(
@@ -1127,7 +1130,9 @@ y_{i\tau} = \beta_0 + b_{0i} + b_{1i} \tau + \epsilon_{i},
 $$
 (which corresponds to setting $\beta_1 = 0$) and obtain the residuals for the PAP patients. All the other terms in the model are left unchanged so they retain the same explanation from above. Any pattern among these residuals will demonstate the time fixed effect not covered in the null model.  
 
-The fluorescence residuals are then winsorized at -1.7 and 1.7, which correspond to roughly bottom 5\% and top 5\% of the residuals. We then use these winsorized fluorescence residuals to plot the heatmap without any row-wise scaling. The color scheme of the heatmap is specified as navy for -1.7 which gradually transitions to firebrick for 1.7. Note that the order of the patients are the same across the 3 time points to show how these individuals' antibody response changes over time. Overall, the heatmap clearly illustrates that the individuals' antibody response levels increase over time.   
+The fluorescence residuals are then winsorized at -1.7 and 1.7, which correspond to roughly bottom 5\% and top 5\% of the residuals. We then use these winsorized fluorescence residuals to plot the heatmap without any row-wise scaling. The color scheme of the heatmap is specified as navy for -1.7 which gradually transitions to firebrick for 1.7. Note that the order of the patients are the same across the 3 time points to show how these individuals' antibody response changes over time. Overall, the heatmap clearly illustrates that the individuals' antibody response levels increase over time.  
+
+The heatmap also illustrates the fact that each patient's antibody response across the 3 time points is still different. For example, fluorescence levels of (most of) the 5680 peptides for patients with ID *pap078*, *pap099*, *pap032* and *pap111* are pretty 'flat' across the first 3 months before rising profusely in the next 3 months. Patients with ID *pap018*, *pap002*, *pap013*, *pap001*, *pap026*, *pap027*, *pap115*, *pap088*, *pap079* and *pap067* exhibit a drop in antibody response level at time 3 months followed by a substantive increase at time 6 months. In a way, these peptides made the aforementioned dual-cutoff (at most 5\% BH FDR and time fixed-effect coefficient $\geq$ 0.3333) because antibody response levels increase tremendously by time 6 months for all 20 patients. 
 
 ```{r}
 proj2_resid <- PAP_resid_fit0[signif_crit_proj2,]
@@ -1270,10 +1275,12 @@ kable(wilcox_peptide_counts_df, row.names = F, booktabs = T, linesep = "") %>%
 
 To analyze how treatments (PAP vaccine or ADT) influence change in antibody responses over time,  
 
-* We deployed linear mixed effects model for each peptide, separately for the group of PAP-vaccinated patients and for the group of patients administered with ADT.  
-* We also applied the BH procedure on the F-test p-values of the time fixed effects for both groups of patients.  
+* We deployed linear mixed effects model for each peptide, separately for the group of PAP-vaccinated patients and for the group of patients administered with ADT.
+* We also applied the BH procedure on the F-test p-values of the time fixed effects for both groups of patients.
 * No significant peptides are identified for the ADT group, even at $20 \%$ FDR.
 * For the PAP group, we identified `r proj2_signif_count` peptides at $5\%$  BH FDR which also exhibit at least two-fold increase in median fluorescence levels every 3 months. Gene-set analysis is also performed based on the proteins associated with this list of peptides.
 * The heatmap clearly illustrates that PAP-vaccinated patients had significantly higher antibody responses (measured by those peptides) over the course of 6 months.  
 
 The lists of significant peptides identified in both studies are exported to the Excel file "*09_Significant_Peptides.xlsx*". Boxplots of median fluorescence levels of some example peptides for different cancer stages are generated in .png images. 
+
+\bibliography{combined_analysis} 
